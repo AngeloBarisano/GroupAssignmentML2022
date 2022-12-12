@@ -2,6 +2,379 @@
 # Hello Friends: I am not known for making beauftiful files. So feel free if you are bored.
 
 ```{r}
+load("/home/angelo/Documents/Uni/Courses/Machine Learning & Algorithms/group_assignment/data/bookings_train.RData")
+
+
+library("tidymodels")
+
+library("themis")
+library("knitr")
+library("ranger")
+library("doParallel")
+library("vip")
+
+library("skimr")
+library("corrplot")
+library("ggridges")
+
+
+library("forcats")
+```
+
+
+## Observe proportions in the original outcome
+```{r}
+bookings_train |> count(is_cancelled) |> 
+  mutate(prop = n / sum(n))
+
+bookings_train |> group_by(is_cancelled)|> knit_print()
+
+#' insight: there is less of a problem than I though wrt balancing issues. 
+```
+```{r}
+skim(bookings_train) |> knit_print()
+```
+
+```{r}
+bookings_train["arrival_date_year"] <- as.factor(bookings_train["arrival_date_year"])
+bookings_train["arrival_date_month"] <- as.factor(bookings_train["arrival_date_month"])
+bookings_train["arrival_date_week_number"] <- as.factor(bookings_train["arrival_date_week_number"])
+bookings_train["arrival_date_day_of_month"] <- as.factor(bookings_train["arrival_date_day_of_month"])
+bookings_train["reserved_room_type"] <- as.factor(bookings_train["reserved_room_type"])
+bookings_train["assigned_room_type"] <- as.factor(bookings_train["assigned_room_type"])
+bookings_train["country"] <- as.factor(bookings_train["country"])
+```
+
+# Simple preprocsessing
+```{r}
+# # lump country together 
+# forcats::fct_lump(bookings_train)
+# 
+# 
+# bookings_train["country"] <- forcats::fct_lump(
+#   c("country"),
+#   3,
+#   other_level = "Other",
+#   ties.method = c("min", "average", "first", "last", "random", "max")
+# )
+# 
+# 
+# 
+# fct_lump(
+#  c(bookings_train["country"])
+# 
+# 
+# )
+
+
+
+```
+```{r}
+
+# I am a basic bitch
+set.seed(42)
+bookings_train_split <- initial_split(data = bookings_train, prop = 0.80, 
+                          strata = is_cancelled)
+
+# I keep the train in the name for a reason: this way we can differentiate between validation and test set lateron
+bookings_train_train <- training(bookings_train_split)
+bookings_train_test <- testing(bookings_train_split)
+
+
+print(bookings_train_train |> count(is_cancelled) |> 
+  mutate(prop = n / sum(n)))
+print(bookings_train_test |> count(is_cancelled) |> 
+  mutate(prop = n / sum(n)))
+#' yep, worked
+```
+
+# Preprocessing reciepe
+
+
+
+
+
+
+
+```{r}
+recipe_prelim <- recipe(is_cancelled ~ ., data = bookings_train_train) |> 
+  # assigned_room_type might induce some information leakage; but we can discuss this
+  update_role("assigned_room_type", "arrival_date_year", new_role = "metadata") |> 
+  step_other("reserved_room_type", "meal" , "market_segment") |>
+  step_normalize(all_numeric())|>
+  step_dummy(all_nominal())|>
+  # step_impute_median(country) |>
+  step_downsample("is_cancelled") 
+
+```
+
+
+
+
+```{r}
+set.seed(82001)
+cv_folds <- bookings_train_train |> vfold_cv(v = 10, strata = is_cancelled)
+
+
+```
+
+# Random Forst
+```{r}
+rf_model_tune <- rand_forest(mtry = tune(), trees = 1000) |>
+  set_mode("classification") |>
+  set_engine("ranger")
+
+ridge_logreg <- logistic_reg(penalty = tune(), mixture = 0) |> 
+  set_engine("glmnet")
+
+lasso_logreg <- logistic_reg(penalty = tune(), mixture = 1) |> 
+  set_engine("glmnet")
+
+```
+
+### da workflows
+```{r}
+rf_wf <- workflow() |> 
+  add_recipe(recipe_prelim) |> 
+  add_model(rf_model_tune)
+
+
+ridge_wf <- workflow() |> 
+  add_recipe(recipe_prelim) |> 
+  add_model(ridge_logreg)
+
+lasso_wf <- workflow() |> 
+  add_recipe(recipe_prelim) |> 
+  add_model(lasso_logreg)
+
+```
+
+# metrics
+```{r}
+
+class_metrics <- metric_set(accuracy, f_meas,bal_accuracy, kap, sensitivity, 
+                            specificity, roc_auc)
+
+```
+
+# Random forest model
+
+```{r}
+set.seed(42)
+# as I said: i am a basic 42-bitch
+rf_wf_tuned <- tune_grid(
+  rf_wf,
+  resamples = cv_folds,
+  grid = tibble(mtry = 1:12),
+  metrics = class_metrics,
+  control = control_grid(verbose = TRUE)
+)
+
+
+
+```
+
+
+```{r}
+rf_wf_tuned |>
+  collect_metrics()
+
+
+```
+
+
+
+```{r}
+
+rf_wf_tuned |>
+  collect_metrics() |>
+  filter(.metric %in% c("sensitivity", "specificity")) |>
+  ggplot(aes(x = mtry, y = mean, ymin = mean - std_err, ymax = mean + std_err, 
+             colour = .metric)) +
+  geom_errorbar() + 
+  geom_line() +
+  geom_point() +
+  facet_grid(.metric ~ ., scales = "free_y") 
+
+
+
+```
+
+
+
+
+
+```{r}
+rf_tune_res |>
+  collect_metrics() |>
+  filter(.metric %in% c("roc_auc", "accuracy", "kap")) |>
+  ggplot(aes(x = mtry, y = mean, ymin = mean - std_err, ymax = mean + std_err, 
+             colour = .metric)) +
+  geom_errorbar() + 
+  geom_line() +
+  geom_point() +
+  facet_grid(.metric ~ ., scales = "free_y") 
+```
+
+
+
+
+
+
+# grid for lasso/ ridge
+```{r}
+grid_lasso <- tibble(penalty = 10^(seq(from = -4.5, to = -0.5, length.out = 100)))
+grid_ridge <- tibble(penalty = 10^(seq(from = -2.5, to = 2, length.out = 100)))
+
+
+```
+
+
+```{r}
+
+
+lasso_tune <- lasso_wf |> 
+  tune_grid(resamples = cv_folds, 
+            grid = grid_lasso,
+            metrics = class_metrics)
+
+
+ridge_tune <- ridge_wf |> 
+  tune_grid(resamples = cv_folds, 
+            grid = grid_ridge,
+            metrics = class_metrics)
+
+```
+
+
+
+
+```{r}
+
+
+lasso_tune_metrics <- lasso_tune |> 
+  collect_metrics()
+lasso_tune_metrics |> filter(.metric == "accuracy") |> 
+  ggplot(aes(x = penalty, y = mean, 
+             ymin = mean - std_err, ymax = mean + std_err)) + 
+  geom_errorbar(alpha = 0.5) + 
+  geom_point() + 
+  scale_x_log10() + 
+  labs(y = "Accuracy", x = expression(lambda))
+
+
+ridge_tune_metrics <- ridge_tune |> 
+  collect_metrics()
+ridge_tune_metrics |> filter(.metric == "accuracy") |> 
+  ggplot(aes(x = penalty, y = mean, 
+             ymin = mean - std_err, ymax = mean + std_err)) + 
+  geom_errorbar(alpha = 0.5) + 
+  geom_point() + 
+  scale_x_log10() + 
+  labs(y = "Accuracy", x = expression(lambda))
+
+```
+
+
+```{r}
+
+
+lasso_1se_model <- lasso_tune |> 
+  select_by_one_std_err(metric = "accuracy", desc(penalty))
+lasso_1se_model
+
+
+ridge_1se_model <- ridge_tune |> 
+  select_by_one_std_err(metric = "accuracy", desc(penalty))
+ridge_1se_model
+```
+
+# Finalize all workflows in order to start comparing them to each other
+```{r}
+lasso_wf_tuned <- 
+  lasso_wf |> 
+  finalize_workflow(lasso_1se_model)
+lasso_wf_tuned
+
+
+ridge_wf_tuned <- 
+  ridge_wf |> 
+  finalize_workflow(ridge_1se_model)
+ridge_wf_tuned
+
+
+
+best_acc <- select_best(rf_tune_res, "accuracy")
+rf_final_wf <- finalize_workflow(rf_tune_wf, best_acc)
+rf_final_wf
+
+
+```
+
+# Test set performance
+
+# random forstest
+```{r}
+set.seed(9923)
+rf_final_fit <- rf_final_wf |>
+  last_fit(bookings_train_split, metrics = class_metrics)
+# The results on the test set for class predictions are:
+rf_final_fit |>
+  collect_metrics()
+
+
+```
+Confusion matrix and visual assessments of performance
+```{r}
+
+rf_final_fit |> collect_predictions() |> 
+  conf_mat(truth = loan_status, estimate = .pred_class) 
+
+# As one would expect, there are many more false positives than false negatives.
+```
+
+Here are some visualizations for the test set predictions. The ROC-curve can be constructed as follows:
+```{r}
+
+rf_final_fit |> collect_predictions() |> 
+  roc_curve(loan_status, .pred_Default) |> 
+  autoplot()
+
+
+```
+
+There is clearly room for improvement in terms of AUC. The lift curve look as follows:
+```{r}
+
+rf_final_fit |> collect_predictions() |> 
+  lift_curve(loan_status, .pred_Default) |> 
+  autoplot()
+#' So when targeting the 25% of loans with the highest predicted probability of default, a bit less than twice as many loans that defaulted are identified compared to when targeting is done randomly.
+
+```
+
+Finally, here is a gain chart:
+```{r}
+
+rf_final_fit |> collect_predictions() |> 
+  gain_curve(loan_status, .pred_Default) |> 
+  autoplot()
+
+
+```
+
+# Lasso/ ridge
+```{r}
+
+lasso_last_fit <- lasso_wf_tuned |> 
+  last_fit(spam_split, metrics = class_metrics)
+lasso_test_metrics <- lasso_last_fit |> collect_metrics()
+lasso_test_metrics
+
+ridge_last_fit <- ridge_wf_tuned |> 
+  last_fit(spam_split, metrics = class_metrics)
+ridge_test_metrics <- ridge_last_fit |> collect_metrics()
+ridge_test_metrics
 
 
 
@@ -11,62 +384,25 @@
 
 
 ```{r}
-```
+lasso_test_metrics <- lasso_test_metrics |> 
+  select(-.estimator, -.config) |> 
+  mutate(model = "lasso")
 
 
-```{r}
-```
+
+ridge_test_metrics <- ridge_test_metrics |> 
+  select(-.estimator, -.config) |> 
+  mutate(model = "ridge")
 
 
-```{r}
-```
 
 
-```{r}
-```
 
 
-```{r}
-```
 
 
-```{r}
-```
 
 
-```{r}
-```
-
-
-```{r}
-```
-
-
-```{r}
-```
-
-
-```{r}
-```
-
-
-```{r}
-```
-
-
-```{r}
-```
-
-
-```{r}
-```
-
-
-```{r}
-```
-
-
-```{r}
 ```
 
 
