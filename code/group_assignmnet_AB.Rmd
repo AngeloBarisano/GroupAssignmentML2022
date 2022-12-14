@@ -119,7 +119,7 @@ print(bookings_train_test |> count(is_cancelled) |>
 
 recipe_prelim <- recipe(is_cancelled ~ ., data = bookings_train_train) |> 
   # assigned_room_type might induce some information leakage; but we can discuss this
-  update_role("country","assigned_room_type", "arrival_date_year", "arrival_date_month", "arrival_date_day_of_month", "adr", new_role = "metadata") |>
+  update_role("country","assigned_room_type", "arrival_date_year", "date_col", "arrival_date_month", "arrival_date_day_of_month", "adr", new_role = "metadata") |>
   step_other("reserved_room_type", "meal" , "market_segment") |>
   step_harmonic('arrival_date_day_of_week',frequency=1,cycle_size=7, role='predictor') |>
   step_harmonic('arrival_date_month_numb',frequency=1,cycle_size=12, role='predictor') |>        step_harmonic('arrival_date_week_number',frequency=1,cycle_size=53, role='predictor') |>
