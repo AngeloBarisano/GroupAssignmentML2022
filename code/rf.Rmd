@@ -2,6 +2,7 @@
 # Hello Friends: I am not known for making beauftiful files. So feel free if you are bored.
 
 ```{r}
+
 load("/home/angelo/Documents/Uni/Courses/Machine Learning & Algorithms/group_assignment/data/bookings_train.RData")
 library("tidymodels")
 library("themis")
@@ -15,6 +16,9 @@ library("ggridges")
 library("forcats")
 
 require("lubridate")
+
+load("/home/angelo/Documents/Uni/Courses/Machine Learning & Algorithms/group_assignment/data/bookings_test.RData")
+
 ```
 
 
@@ -38,6 +42,18 @@ bookings_train$got_reserved_room <- as.factor(bookings_train$got_reserved_room)
 
 
 ```
+
+```{r}
+bookings_train$reserved_room_type <- ifelse(bookings_train$reserved_room_type == "L", "I", bookings_train$reserved_room_type)
+```
+
+
+```{r}
+# here we replace the null values with NA! 
+bookings_train$country <- ifelse(bookings_train$country == "NULL", NA, bookings_train$country)
+
+```
+
 
 
 ## Observe proportions in the original outcome
@@ -82,7 +98,7 @@ bookings_train$arrival_date_week_number <- as.numeric(bookings_train$arrival_dat
 
 # Simple preprocsessing
 ```{r}
-bookings_train$country <- fct_lump_min(as.factor(bookings_train$country), min=200, other_level = "Other")
+bookings_train$country <- fct_lump_min(as.factor(bookings_train$country), min=300, other_level = "Other")
 
 # remove 0 visits
 bookings_train <- bookings_train %>% 
@@ -92,10 +108,18 @@ bookings_train <- bookings_train %>%
   filter(!(stays_in_weekend_nights == 0 & stays_in_week_nights == 0)) %>% 
   filter(adults != 0)
 
+
+
+bookings_train <- bookings_train %>% 
+  filter(!(adr < 0))
+
 ```
 
+```{r}
 
+bookings_train$total_visitors <- bookings_train$children + bookings_train$adults + bookings_train$babies
 
+```
 
 ```{r}
 # split the data
@@ -118,15 +142,18 @@ print(bookings_train_test |> count(is_cancelled) |>
 ```{r}
 
 recipe_prelim <- recipe(is_cancelled ~ ., data = bookings_train_train) |> 
-  update_role("country","assigned_room_type", "date_col", "arrival_date_month", "arrival_date_day_of_month", "adr", new_role = "metadata") |>
+  update_role( "date_col", "arrival_date_month", "arrival_date_day_of_month", "children","assigned_room_type", "reserved_room_type", "arrival_date_week_number", "total_visitors", new_role = "metadata") |>
   step_other("reserved_room_type", "meal" , "market_segment") |>
   step_harmonic('arrival_date_day_of_week',frequency=1,cycle_size=7, role='predictor') |>
-  step_harmonic('arrival_date_month_numb',frequency=1,cycle_size=12, role='predictor') |>        step_harmonic('arrival_date_week_number',frequency=1,cycle_size=53, role='predictor') |>
+ # step_harmonic('arrival_date_week_number',frequency=1,cycle_size=53, role='predictor') |>
+  # step_harmonic('arrival_date_month_numb',frequency=1,cycle_size=12, role='predictor') |>   
+  step_impute_mode("country") |>
   step_normalize(all_numeric_predictors())|>
   step_dummy(all_nominal_predictors())|>
-  step_impute_mode(all_nominal_predictors()) |>
-  step_impute_knn(all_numeric_predictors()) |>
-  step_downsample("is_cancelled") 
+  # step_impute_knn(all_numeric_predictors()) |>
+  step_nzv() |>
+  step_downsample("is_cancelled")
+
 
 
 ```
@@ -136,7 +163,7 @@ recipe_prelim <- recipe(is_cancelled ~ ., data = bookings_train_train) |>
 
 ```{r}
 set.seed(82001)
-cv_folds <- bookings_train_train |> vfold_cv(v = 10, strata = is_cancelled)
+cv_folds <- bookings_train_train |> vfold_cv(v = 3, strata = is_cancelled)
 ```
 
 # Random Forst
@@ -144,10 +171,6 @@ cv_folds <- bookings_train_train |> vfold_cv(v = 10, strata = is_cancelled)
 rf_model_tune <- rand_forest(mtry = tune(), trees = 500) |>
   set_mode("classification") |>
   set_engine("ranger")
-ridge_logreg <- logistic_reg(penalty = tune(), mixture = 0) |> 
-  set_engine("glmnet")
-lasso_logreg <- logistic_reg(penalty = tune(), mixture = 1) |> 
-  set_engine("glmnet")
 ```
 
 ### da workflows
@@ -156,13 +179,7 @@ rf_tune_wf <- workflow() |>
   add_recipe(recipe_prelim) |> 
   add_model(rf_model_tune)
 
-ridge_wf <- workflow() |> 
-  add_recipe(recipe_prelim) |> 
-  add_model(ridge_logreg)
 
-lasso_wf <- workflow() |> 
-  add_recipe(recipe_prelim) |> 
-  add_model(lasso_logreg)
 ```
 
 # metrics
@@ -181,7 +198,7 @@ set.seed(42)
 rf_tune_res <- tune_grid(
   rf_tune_wf,
   resamples = cv_folds,
-  grid = tibble(mtry = 1:10),
+  grid = tibble(mtry = 7:12),
   metrics = class_metrics
 )
 
@@ -223,82 +240,14 @@ rf_tune_res |>
   geom_point() +
   facet_grid(.metric ~ ., scales = "free_y") 
 ```
-
-
-
-
-
-
-# grid for lasso/ ridge
-```{r}
-grid_lasso <- tibble(penalty = 10^(seq(from = -4.5, to = -0.5, length.out = 100)))
-grid_ridge <- tibble(penalty = 10^(seq(from = -2.5, to = 2, length.out = 100)))
-```
-
+# Test set performance
 
 ```{r}
-lasso_tune <- lasso_wf |> 
-  tune_grid(resamples = cv_folds, 
-            grid = grid_lasso,
-            metrics = class_metrics)
-ridge_tune <- ridge_wf |> 
-  tune_grid(resamples = cv_folds, 
-            grid = grid_ridge,
-            metrics = class_metrics)
-```
-
-
-
-
-```{r}
-lasso_tune_metrics <- lasso_tune |> 
-  collect_metrics()
-lasso_tune_metrics |> filter(.metric == "accuracy") |> 
-  ggplot(aes(x = penalty, y = mean, 
-             ymin = mean - std_err, ymax = mean + std_err)) + 
-  geom_errorbar(alpha = 0.5) + 
-  geom_point() + 
-  scale_x_log10() + 
-  labs(y = "Accuracy", x = expression(lambda))
-ridge_tune_metrics <- ridge_tune |> 
-  collect_metrics()
-ridge_tune_metrics |> filter(.metric == "accuracy") |> 
-  ggplot(aes(x = penalty, y = mean, 
-             ymin = mean - std_err, ymax = mean + std_err)) + 
-  geom_errorbar(alpha = 0.5) + 
-  geom_point() + 
-  scale_x_log10() + 
-  labs(y = "Accuracy", x = expression(lambda))
-```
-
-
-```{r}
-lasso_1se_model <- lasso_tune |> 
-  select_by_one_std_err(metric = "accuracy", desc(penalty))
-lasso_1se_model
-ridge_1se_model <- ridge_tune |> 
-  select_by_one_std_err(metric = "accuracy", desc(penalty))
-ridge_1se_model
-```
-
-# Finalize all workflows in order to start comparing them to each other
-```{r}
-lasso_wf_tuned <- 
-  lasso_wf |> 
-  finalize_workflow(lasso_1se_model)
-lasso_wf_tuned
-ridge_wf_tuned <- 
-  ridge_wf |> 
-  finalize_workflow(ridge_1se_model)
-ridge_wf_tuned
 best_acc <- select_best(rf_tune_res, "accuracy")
 rf_final_wf <- finalize_workflow(rf_tune_wf, best_acc)
 rf_final_wf
-
-
 ```
 
-# Test set performance
 
 # random forstest
 ```{r}
@@ -309,102 +258,60 @@ rf_final_fit <- rf_final_wf |>
 rf_final_fit |>
   collect_metrics()
 ```
+
+
 Confusion matrix and visual assessments of performance
 ```{r}
-rf_final_fit |> collect_predictions() |> 
-  conf_mat(truth = loan_status, estimate = .pred_class) 
-# As one would expect, there are many more false positives than false negatives.
+# rf_final_fit |> collect_predictions() |> 
+#   conf_mat(truth = is_cancelled, estimate = .pred_class) 
+# # As one would expect, there are many more false positives than false negatives.
 ```
 
 Here are some visualizations for the test set predictions. The ROC-curve can be constructed as follows:
 ```{r}
-rf_final_fit |> collect_predictions() |> 
-  roc_curve(loan_status, .pred_Default) |> 
-  autoplot()
+# rf_final_fit |> collect_predictions() |> 
+#   roc_curve(is_cancelled, .pred_Class) |> 
+#   autoplot()
 ```
 
 There is clearly room for improvement in terms of AUC. The lift curve look as follows:
 ```{r}
-rf_final_fit |> collect_predictions() |> 
-  lift_curve(loan_status, .pred_Default) |> 
-  autoplot()
+# rf_final_fit |> collect_predictions() |> 
+#   lift_curve(loan_status, .pred_Default) |> 
+#   autoplot()
 #' So when targeting the 25% of loans with the highest predicted probability of default, a bit less than twice as many loans that defaulted are identified compared to when targeting is done randomly.
 ```
 
 Finally, here is a gain chart:
 ```{r}
-rf_final_fit |> collect_predictions() |> 
-  gain_curve(loan_status, .pred_Default) |> 
-  autoplot()
-```
-
-# Lasso/ ridge
-```{r}
-lasso_last_fit <- lasso_wf_tuned |> 
-  last_fit(spam_split, metrics = class_metrics)
-lasso_test_metrics <- lasso_last_fit |> collect_metrics()
-lasso_test_metrics
-ridge_last_fit <- ridge_wf_tuned |> 
-  last_fit(spam_split, metrics = class_metrics)
-ridge_test_metrics <- ridge_last_fit |> collect_metrics()
-ridge_test_metrics
+# rf_final_fit |> collect_predictions() |> 
+#   gain_curve(loan_status, .pred_Default) |> 
+#   autoplot()
 ```
 
 
-```{r}
-lasso_test_metrics <- lasso_test_metrics |> 
-  select(-.estimator, -.config) |> 
-  mutate(model = "lasso")
-ridge_test_metrics <- ridge_test_metrics |> 
-  select(-.estimator, -.config) |> 
-  mutate(model = "ridge")
-load()
-```
 
 
-```{r}
-```
 
 
-```{r}
-```
 
 
-```{r}
-```
 
 
-```{r}
-```
 
 
-```{r}
-```
 
 
-```{r}
-```
 
 
-```{r}
-```
 
 
-```{r}
-```
 
 
-```{r}
-```
 
 
-```{r}
-```
 
 
-```{r}
-```
 
 
-```{r}
-```
+
