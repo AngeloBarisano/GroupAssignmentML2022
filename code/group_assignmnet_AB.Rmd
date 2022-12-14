@@ -13,6 +13,30 @@ library("skimr")
 library("corrplot")
 library("ggridges")
 library("forcats")
+
+require("lubridate")
+```
+
+
+```{r}
+# convert to day of week 
+tst <- c(bookings_train$arrival_date_month)
+bookings_train$arrival_date_month_numb <- match(tst,month.name)
+
+bookings_train$date_col <- as.Date(ISOdate(year = bookings_train$arrival_date_year, month = bookings_train$arrival_date_month_numb, day = bookings_train$arrival_date_day_of_month))
+
+bookings_train$arrival_date_day_of_week <- wday(bookings_train$date_col)
+
+bookings_train$arrival_date_day_of_week <- as.factor(bookings_train$arrival_date_day_of_week)
+
+
+
+# reserved roomtype being equal 
+bookings_train$got_reserved_room <- as.numeric(bookings_train$reserved_room_type == bookings_train$assigned_room_type)
+
+bookings_train$got_reserved_room <- as.factor(bookings_train$got_reserved_room)
+
+
 ```
 
 
@@ -21,7 +45,7 @@ library("forcats")
 bookings_train |> count(is_cancelled) |> 
   mutate(prop = n / sum(n))
 bookings_train |> group_by(is_cancelled)|> knit_print()
-#' insight: there is less of a problem than I though wrt balancing issues. 
+
 ```
 
 
@@ -35,19 +59,22 @@ skim(bookings_train) |> group_by("is_cancelled") |> knit_print()
 
 
 ```{r}
-bookings_train["arrival_date_year"] <- as.factor(bookings_train["arrival_date_year"])
-bookings_train["arrival_date_month"] <- as.factor(bookings_train["arrival_date_month"])
-bookings_train["arrival_date_week_number"] <- as.factor(bookings_train["arrival_date_week_number"])
-bookings_train["arrival_date_day_of_month"] <- as.factor(bookings_train["arrival_date_day_of_month"])
-bookings_train["reserved_room_type"] <- as.factor(bookings_train["reserved_room_type"])
-bookings_train["assigned_room_type"] <- as.factor(bookings_train["assigned_room_type"])
-bookings_train["country"] <- as.factor(bookings_train["country"])
+# convert to factor 
+bookings_train$arrival_date_year <- as.factor(bookings_train$arrival_date_year)
+bookings_train$arrival_date_month <- as.factor(bookings_train$arrival_date_month)
+bookings_train$arrival_date_week_number <- as.factor(bookings_train$arrival_date_week_number)
+bookings_train$arrival_date_day_of_month <- as.factor(bookings_train$arrival_date_day_of_month)
+bookings_train$reserved_room_type <- as.factor(bookings_train$reserved_room_type)
+bookings_train$assigned_room_type <- as.factor(bookings_train$assigned_room_type)
+bookings_train$country <- as.factor(bookings_train$country)
+
+bookings_train$arrival_date_day_of_week <- as.numeric(bookings_train$arrival_date_day_of_week)
+bookings_train$arrival_date_month_numb <- as.numeric(bookings_train$arrival_date_month_numb)
+bookings_train$arrival_date_week_number <- as.numeric(bookings_train$arrival_date_week_number)
+
 ```
 
-```{r}
-  # update_role("reserved_room_type","country","assigned_room_type", "arrival_date_year", "arrival_date_month", "arrival_date_week_number", "arrival_date_day_of_month", new_role = "metadata") |>
-  # step_other("reserved_room_type", "meal" , "market_segment") |>
-```
+
 
 
 
@@ -55,21 +82,15 @@ bookings_train["country"] <- as.factor(bookings_train["country"])
 
 # Simple preprocsessing
 ```{r}
-bookings_train$country <- fct_lump_min(as.factor(bookings_train$country), min=300, other_level = "Other")
+bookings_train$country <- fct_lump_min(as.factor(bookings_train$country), min=200, other_level = "Other")
 
+# remove 0 visits
+bookings_train <- bookings_train %>% 
+  filter(!(stays_in_weekend_nights == 0 & stays_in_week_nights == 0))
 
-
-
-
-# remove those rows with negative ADR
-"adr"
-
-# remove bookings with zero adults!
-
-
-# pairs!
-
-
+bookings_train <- bookings_train %>% 
+  filter(!(stays_in_weekend_nights == 0 & stays_in_week_nights == 0)) %>% 
+  filter(adults != 0)
 
 ```
 
@@ -77,31 +98,38 @@ bookings_train$country <- fct_lump_min(as.factor(bookings_train$country), min=30
 
 
 ```{r}
-# I am a basic bitch
+# split the data
 set.seed(42)
 bookings_train_split <- initial_split(data = bookings_train, prop = 0.80, 
                           strata = is_cancelled)
-# I keep the train in the name for a reason: this way we can differentiate between validation and test set lateron
+
+# I keep the train in the name for a reason: this way we can differentiate between validation and test set later on
 bookings_train_train <- training(bookings_train_split)
 bookings_train_test <- testing(bookings_train_split)
 print(bookings_train_train |> count(is_cancelled) |> 
   mutate(prop = n / sum(n)))
 print(bookings_train_test |> count(is_cancelled) |> 
   mutate(prop = n / sum(n)))
-#' yep, worked
+
 ```
 
 # Preprocessing reciepe
 
 ```{r}
+
 recipe_prelim <- recipe(is_cancelled ~ ., data = bookings_train_train) |> 
   # assigned_room_type might induce some information leakage; but we can discuss this
-  update_role("reserved_room_type","country","assigned_room_type", "arrival_date_year", "arrival_date_month", "arrival_date_week_number", "arrival_date_day_of_month", new_role = "metadata") |>
+  update_role("country","assigned_room_type", "arrival_date_year", "arrival_date_month", "arrival_date_day_of_month", "adr", new_role = "metadata") |>
   step_other("reserved_room_type", "meal" , "market_segment") |>
+  step_harmonic('arrival_date_day_of_week',frequency=1,cycle_size=7, role='predictor') |>
+  step_harmonic('arrival_date_month_numb',frequency=1,cycle_size=12, role='predictor') |>        step_harmonic('arrival_date_week_number',frequency=1,cycle_size=53, role='predictor') |>
   step_normalize(all_numeric_predictors())|>
   step_dummy(all_nominal_predictors())|>
-  # step_impute_median(country) |>
+  step_impute_mode(all_nominal_predictors()) |>
+  step_impute_knn(all_numeric_predictors()) |>
   step_downsample("is_cancelled") 
+
+
 ```
 
 
@@ -109,7 +137,7 @@ recipe_prelim <- recipe(is_cancelled ~ ., data = bookings_train_train) |>
 
 ```{r}
 set.seed(82001)
-cv_folds <- bookings_train_train |> vfold_cv(v = 10, strata = is_cancelled)
+cv_folds <- bookings_train_train |> vfold_cv(v = 5, strata = is_cancelled)
 ```
 
 # Random Forst
@@ -128,9 +156,11 @@ lasso_logreg <- logistic_reg(penalty = tune(), mixture = 1) |>
 rf_wf <- workflow() |> 
   add_recipe(recipe_prelim) |> 
   add_model(rf_model_tune)
+
 ridge_wf <- workflow() |> 
   add_recipe(recipe_prelim) |> 
   add_model(ridge_logreg)
+
 lasso_wf <- workflow() |> 
   add_recipe(recipe_prelim) |> 
   add_model(lasso_logreg)
@@ -156,6 +186,8 @@ rf_wf_tuned <- tune_grid(
   metrics = class_metrics,
   control = control_grid(verbose = TRUE)
 )
+
+show_notes(.Last.tune.result)
 ```
 
 
