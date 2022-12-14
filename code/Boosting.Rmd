@@ -1,0 +1,192 @@
+---
+title: "Boosting"
+author: "Myself"
+date: "2022-12-14"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+```{r cars}
+library(xgboost)
+library(tictoc)
+```
+
+# Define Model
+```{r pressure, echo=FALSE}
+xgb_model_tune <- 
+  boost_tree(trees = tune(), tree_depth = tune(), learn_rate = tune(),
+             mtry = tune(), min_n = tune(), stop_iter = 400) |>
+  set_mode("classification") |>
+set_engine("xgboost")
+```
+
+# Define Recipe
+```{r}
+recipe_prelim <- recipe(is_cancelled ~ ., data = bookings_train_train) |> 
+  # assigned_room_type might induce some information leakage; but we can discuss this
+  update_role("arrival_date_month", "arrival_date_day_of_month", "arrival_date_month_numb", "date_col", new_role = "metadata") |>
+  step_other("reserved_room_type", "meal" , "market_segment") |>
+  step_harmonic('arrival_date_day_of_week',frequency=1,cycle_size=7, role='predictor') |>
+  # step_harmonic('arrival_date_month_numb',frequency=1,cycle_size=12, role='predictor') |>          
+  step_harmonic('arrival_date_week_number',frequency=1,cycle_size=53, role='predictor') |>
+  step_normalize(all_numeric_predictors())|>
+  step_dummy(all_nominal_predictors())|>
+  step_nzv(all_predictors()) %>% 
+  step_downsample('is_cancelled')
+```
+
+
+# Combine Workflow
+```{r pressure, echo=FALSE}
+xgb_tune_wf <- workflow() |>
+  add_recipe(recipe_prelim) |>
+  add_model(xgb_model_tune)
+```
+
+# Define Metrics
+```{r pressure, echo=FALSE}
+class_metrics <- metric_set(accuracy, f_meas, bal_accuracy, kap, sensitivity, 
+                            specificity, roc_auc, precision)
+```
+
+# Parallel Computations
+```{r}
+registerDoParallel()
+```
+
+# Create RandomSearch Grid
+```{r}
+set.seed(7)
+xgb_grid <- grid_max_entropy(tree_depth(range = c(1, 15)), 
+                             learn_rate(range = c(-2.7, -0.6)),
+                             trees(range = c(300, 2400)),
+                             mtry(range = c(2, 12)),
+                             min_n(range = c(5, 40)),
+                             size = 60)
+xgb_grid
+```
+
+# Perform Tuning
+```{r}
+tic()
+xgb_tune_res <- tune_grid(
+  xgb_tune_wf,
+  resamples = cv_folds,
+  grid = xgb_grid,
+  metrics = class_metrics
+)
+toc()
+```
+
+# Extract Best Values
+```{r}
+xgb_tune_metrics <- xgb_tune_res |>
+  collect_metrics()
+xgb_tune_metrics
+```
+
+# Plot Accuracy
+```{r}
+xgb_tune_metrics |> 
+  filter(.metric == "accuracy") |> 
+  ggplot(aes(x = trees, y = mean, 
+             colour = tree_depth)) +
+  geom_point() +
+  labs(y = "Accuracy") 
+```
+
+# Plot Sensitivity
+```{r}
+xgb_tune_metrics |> 
+  filter(.metric == "sensitivity") |> 
+  ggplot(aes(x = trees, y = mean, colour = tree_depth)) +
+  geom_point() +
+  labs(y = "Sensitivity")
+```
+
+
+# Extract Best Model
+```{r}
+# xgb_best <- xgb_tune_metrics |> 
+#   filter(.metric == "accuracy", tree_depth == 14, trees == 309, mtry == 4)
+
+second_best <- xgb_tune_metrics %>% 
+  filter(.metric == "accuracy", tree_depth == 12, trees == 960, mtry == 5)
+
+third_best <- xgb_tune_metrics %>% 
+  filter(.metric == "accuracy", tree_depth == 9, trees == 1364, mtry == 10)
+
+xgb_final_wf <- finalize_workflow(xgb_tune_wf, xgb_best)
+xgb_final_wf
+```
+
+# Extract Best Sensitivity Model
+```{r}
+sens_best <- xgb_tune_metrics %>% 
+  filter(.metric == "sensitivity", tree_depth == 10, trees == 1626, mtry == 9)
+
+xgb_final_wf <- finalize_workflow(xgb_tune_wf, sens_best)
+xgb_final_wf
+
+```
+
+
+# Last Fit on All Training Data
+```{r}
+xgb_final_fit <- xgb_final_wf |>
+  last_fit(bookings_train_split, metrics = class_metrics)
+```
+
+# Collect Metrics for Final Fit
+```{r}
+xgb_test_results <- xgb_final_fit |>
+  collect_metrics()
+save(xgb_test_results, file = "xgb_test_results.RData")
+```
+
+# Check Final Metrics
+```{r}
+xgb_test_results
+```
+
+# Confusion Matrix
+```{r}
+xgb_final_fit |> collect_predictions() |> 
+  conf_mat(truth = is_cancelled, estimate = .pred_class) 
+```
+###### Re-define Best Model  ####### 
+```{r}
+xgb_model <- 
+  boost_tree(trees = 1626, tree_depth = 10, learn_rate = 0.0055452289,
+             mtry = 9, min_n = 7, stop_iter = 400) |>
+  set_mode("classification") |>
+set_engine("xgboost")
+```
+
+# Creating workflow
+```{r}
+xgb_wf <- workflow() |>
+  add_recipe(recipe_prelim) |>
+  add_model(xgb_model)
+```
+
+# Fitting workflow
+```{r}
+xgb_fit <- xgb_wf |>
+  last_fit(bookings_train_split, metrics = class_metrics)
+```
+
+```{r}
+xgb_test_results <- xgb_final_fit |>
+  collect_metrics()
+save(xgb_test_results, file = "xgb_test_results.RData")
+
+xgb_test_results
+```
+
+

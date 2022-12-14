@@ -1,0 +1,165 @@
+---
+title: "Boosting"
+author: "Myself"
+date: "2022-12-14"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(bonsai)
+library(lightgbm)
+```
+
+
+# Define Model
+```{r pressure, echo=FALSE}
+lgbm_model_tune <- boost_tree(
+  mtry = tune(), 
+  trees = tune(), 
+  min_n = tune(), 
+  tree_depth = tune(),
+  learn_rate = tune(), 
+  stop_iter = 300)|>
+  set_mode("classification") |>
+set_engine("lightgbm")
+```
+
+# Define Recipe
+```{r}
+recipe_prelim <- recipe(is_cancelled ~ ., data = bookings_train_train) |> 
+  # assigned_room_type might induce some information leakage; but we can discuss this
+  update_role("arrival_date_month", "arrival_date_day_of_month", "arrival_date_month_numb", "date_col", new_role = "metadata") |>
+  step_other("reserved_room_type", "meal" , "market_segment") |>
+  step_harmonic('arrival_date_day_of_week',frequency=1,cycle_size=7, role='predictor') |>
+  # step_harmonic('arrival_date_month_numb',frequency=1,cycle_size=12, role='predictor') |>          
+  step_harmonic('arrival_date_week_number',frequency=1,cycle_size=53, role='predictor') |>
+  step_normalize(all_numeric_predictors())|>
+  step_dummy(all_nominal_predictors())|>
+  step_nzv(all_predictors()) %>% 
+  step_downsample('is_cancelled')
+```
+
+
+# Combine Workflow
+```{r pressure, echo=FALSE}
+lgbm_tune_wf <- workflow() |>
+  add_recipe(recipe_prelim) |>
+  add_model(lgbm_model_tune)
+```
+
+# Define Metrics
+```{r pressure, echo=FALSE}
+class_metrics <- metric_set(accuracy, f_meas, bal_accuracy, kap, sensitivity, 
+                            specificity, roc_auc, precision)
+```
+
+# Parallel Computations
+```{r}
+registerDoParallel()
+```
+
+# Create RandomSearch Grid
+```{r}
+set.seed(7)
+lgbm_grid <- grid_max_entropy(tree_depth(range = c(1, 12)), 
+                             learn_rate(range = c(-2.5, -0.7)),
+                             trees(range = c(300, 3500)),
+                             mtry(range = c(2, 10)),
+                             min_n(range = c(4, 40)),
+                             size = 30)
+lgbm_grid
+```
+
+# Perform Tuning
+```{r}
+tic()
+lgbm_tune_res <- tune_grid(
+  lgbm_tune_wf,
+  resamples = cv_folds,
+  grid = lgbm_grid,
+  metrics = class_metrics
+)
+toc()
+```
+
+# Extract Best Values
+```{r}
+lgbm_tune_metrics <- lgbm_tune_res |>
+  collect_metrics()
+lgbm_tune_metrics
+```
+
+# Plot Accuracy
+```{r}
+lgbm_tune_metrics |> 
+  filter(.metric == "accuracy") |> 
+  ggplot(aes(x = trees, y = mean, 
+             colour = tree_depth)) +
+  geom_point() +
+  labs(y = "Accuracy") 
+```
+
+# Plot Sensitivity
+```{r}
+lgbm_tune_metrics |> 
+  filter(.metric == "sensitivity") |> 
+  ggplot(aes(x = trees, y = mean, colour = tree_depth)) +
+  geom_point() +
+  labs(y = "Sensitivity")
+```
+
+
+# Extract Best Model
+```{r}
+lgbm_best <- lgbm_tune_metrics |> 
+  filter(.metric == "accuracy", tree_depth == 10, trees == 2070, mtry == 6)
+
+second_best <- lgbm_tune_metrics %>% 
+  filter(.metric == "accuracy", tree_depth == 7, trees == 3335, mtry == 8)
+
+third_best <- lgbm_tune_metrics %>% 
+  filter(.metric == "accuracy", tree_depth == 9, trees == 1364, mtry == 10)
+
+lgbm_final_wf <- finalize_workflow(lgbm_tune_wf, lgbm_best)
+lgbm_final_wf
+```
+
+# Extract Best Sensitivity Model
+```{r}
+sens_best <- lgbm_tune_metrics %>% 
+  filter(.metric == "sensitivity", tree_depth == 10, trees == 1626, mtry == 9)
+
+lgbm_final_wf <- finalize_workflow(lgbm_tune_wf, sens_best)
+lgbm_final_wf
+
+```
+
+
+# Last Fit on All Training Data
+```{r}
+lgbm_final_fit <- lgbm_final_wf |>
+  last_fit(bookings_train_split, metrics = class_metrics)
+```
+
+# Collect Metrics for Final Fit
+```{r}
+lgbm_test_results <- lgbm_final_fit |>
+  collect_metrics()
+save(lgbm_test_results, file = "lgbm_test_results.RData")
+```
+
+# Check Final Metrics
+```{r}
+lgbm_test_results
+```
+
+# Confusion Matrix
+```{r}
+lgbm_final_fit |> collect_predictions() |> 
+  conf_mat(truth = is_cancelled, estimate = .pred_class) 
+```
+
