@@ -1,0 +1,299 @@
+---
+title: "Testset_Evaluation"
+author: "Myself"
+date: "2022-12-16"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Imports
+```{r}
+library("tidymodels")
+library("themis")
+library("knitr")
+library("ranger")
+library("doParallel")
+library("vip")
+library("skimr")
+library("corrplot")
+library("ggridges")
+library("forcats")
+library("vip")
+library("bonsai")
+library("lightgbm")
+library("xgboost")
+
+require("lubridate")
+
+```
+
+## Load Train and Test Data
+```{r}
+load("D:/Universiteit/R/GroupAssignmentML2022/bookings_train.RData")
+load("D:/Universiteit/R/GroupAssignmentML2022/bookings_test_solutions.RData")
+```
+
+
+## Feature Engineering on Train- & Test data
+```{r}
+# Create Day of Week: Train
+tst <- c(bookings_train$arrival_date_month)
+bookings_train$arrival_date_month_numb <- match(tst,month.name)
+
+bookings_train$date_col <- as.Date(ISOdate(year = bookings_train$arrival_date_year, month = bookings_train$arrival_date_month_numb, day = bookings_train$arrival_date_day_of_month))
+
+bookings_train$arrival_date_day_of_week <- wday(bookings_train$date_col)
+
+bookings_train$arrival_date_day_of_week <- as.factor(bookings_train$arrival_date_day_of_week)
+
+
+
+# Create Day of Week: Test
+tst <- c(bookings_test_solutions$arrival_date_month)
+bookings_test_solutions$arrival_date_month_numb <- match(tst,month.name)
+
+bookings_test_solutions$date_col <- as.Date(ISOdate(year = bookings_test_solutions$arrival_date_year, month = bookings_test_solutions$arrival_date_month_numb, day = bookings_test_solutions$arrival_date_day_of_month))
+
+bookings_test_solutions$arrival_date_day_of_week <- wday(bookings_test_solutions$date_col)
+
+bookings_test_solutions$arrival_date_day_of_week <- as.factor(bookings_test_solutions$arrival_date_day_of_week)
+
+
+
+# Did Customer get assigned their reserved Room?: Train
+bookings_train$got_reserved_room <- as.numeric(bookings_train$reserved_room_type == bookings_train$assigned_room_type)
+
+bookings_train$got_reserved_room <- as.factor(bookings_train$got_reserved_room)
+
+
+
+# Did Customer get assigned their reserved Room?: Test
+bookings_test_solutions$got_reserved_room <- as.numeric(bookings_test_solutions$reserved_room_type == bookings_test_solutions$assigned_room_type)
+
+bookings_test_solutions$got_reserved_room <- as.factor(bookings_test_solutions$got_reserved_room)
+
+
+
+
+# Total Visitors: Train
+bookings_train$total_visitors <- bookings_train$children + bookings_train$adults + bookings_train$babies
+
+
+# Total Visitors: Test
+bookings_test_solutions$total_visitors <- bookings_test_solutions$children + bookings_test_solutions$adults + bookings_test_solutions$babies
+```
+
+
+## Data Cleaning
+```{r}
+# Fix Levels of Reserved Room Type: Train
+bookings_train$reserved_room_type <- ifelse(bookings_train$reserved_room_type == "L", "I", bookings_train$reserved_room_type)
+
+# Set Country NULL values to NA: Train
+bookings_train$country <- ifelse(bookings_train$country == "NULL", NA, bookings_train$country)
+
+# convert to factor: Train 
+bookings_train$arrival_date_year <- as.factor(bookings_train$arrival_date_year)
+bookings_train$arrival_date_month <- as.factor(bookings_train$arrival_date_month)
+bookings_train$arrival_date_week_number <- as.factor(bookings_train$arrival_date_week_number)
+bookings_train$arrival_date_day_of_month <- as.factor(bookings_train$arrival_date_day_of_month)
+bookings_train$reserved_room_type <- as.factor(bookings_train$reserved_room_type)
+bookings_train$assigned_room_type <- as.factor(bookings_train$assigned_room_type)
+bookings_train$country <- as.factor(bookings_train$country)
+
+bookings_train$arrival_date_day_of_week <- as.numeric(bookings_train$arrival_date_day_of_week)
+bookings_train$arrival_date_month_numb <- as.numeric(bookings_train$arrival_date_month_numb)
+bookings_train$arrival_date_week_number <- as.numeric(bookings_train$arrival_date_week_number)
+
+bookings_train$country <- fct_lump_min(as.factor(bookings_train$country), min=200, other_level = "Other")
+
+
+
+
+# Fix Levels of Reserved Room Type: Test
+bookings_test_solutions$reserved_room_type <- ifelse(bookings_test_solutions$reserved_room_type == "L", "I", bookings_test_solutions$reserved_room_type)
+
+# Set Country NULL values to NA: Test
+bookings_test_solutions$country <- ifelse(bookings_test_solutions$country == "NULL", NA, bookings_test_solutions$country)
+
+# convert to factor: Test
+bookings_test_solutions$arrival_date_year <- as.factor(bookings_test_solutions$arrival_date_year)
+bookings_test_solutions$arrival_date_month <- as.factor(bookings_test_solutions$arrival_date_month)
+bookings_test_solutions$arrival_date_week_number <- as.factor(bookings_test_solutions$arrival_date_week_number)
+bookings_test_solutions$arrival_date_day_of_month <- as.factor(bookings_test_solutions$arrival_date_day_of_month)
+bookings_test_solutions$reserved_room_type <- as.factor(bookings_test_solutions$reserved_room_type)
+bookings_test_solutions$assigned_room_type <- as.factor(bookings_test_solutions$assigned_room_type)
+bookings_test_solutions$country <- as.factor(bookings_test_solutions$country)
+
+bookings_test_solutions$arrival_date_day_of_week <- as.numeric(bookings_test_solutions$arrival_date_day_of_week)
+bookings_test_solutions$arrival_date_month_numb <- as.numeric(bookings_test_solutions$arrival_date_month_numb)
+bookings_test_solutions$arrival_date_week_number <- as.numeric(bookings_test_solutions$arrival_date_week_number)
+
+bookings_test_solutions$country <- fct_lump_min(as.factor(bookings_test_solutions$country), min=200, other_level = "Other")
+```
+
+
+## Remove Seemingly wrong Observations (TRAIN SET ONLY!!)
+```{r}
+# remove 0 visits
+bookings_train <- bookings_train %>% 
+  filter(!(stays_in_weekend_nights == 0 & stays_in_week_nights == 0)) %>% 
+  filter(adults != 0) %>% 
+  filter(!(adr < 0))
+
+```
+
+
+## Define Recipe
+```{r}
+recipe_prelim <- recipe(is_cancelled ~ ., data = bookings_train_train) |> 
+  update_role( "date_col", "arrival_date_month", "babies",  "arrival_date_day_of_month", "days_in_waiting_list", new_role = "metadata") |>
+  step_harmonic('arrival_date_week_number',frequency=1,cycle_size=53, role='predictor') |>
+  step_harmonic('arrival_date_month_numb',frequency=1,cycle_size=12, role='predictor') |>   
+  step_harmonic('arrival_date_day_of_week',frequency=1,cycle_size=7, role='predictor') |>   
+  step_impute_mode("country") |>
+  step_normalize(all_numeric_predictors())|>
+  step_dummy(all_nominal_predictors())|>
+  step_nzv() |>
+  step_downsample("is_cancelled")
+```
+
+
+## Define LightGBM
+```{r}
+lgbm_model_tune <- boost_tree(
+  mtry = 9, 
+  trees = 2021, 
+  min_n = 7, 
+  tree_depth = 10,
+  learn_rate = 0.00471536,
+  stop_iter = 300)|>
+  set_mode("classification") |>
+set_engine("lightgbm")
+```
+
+
+## Define Random Forest
+```{r}
+rf_model_tune <- rand_forest(mtry = 9, trees = 500) |>
+  set_mode("classification") |>
+  set_engine("ranger", importance = "permutation")
+```
+
+
+## Define XGBoost
+```{r}
+xgb_model <- 
+  boost_tree(trees = 1626, 
+             tree_depth = 10, 
+             learn_rate = 0.0055,
+             mtry = 9, 
+             min_n = 7, 
+             stop_iter = 400) |>
+  set_mode("classification") |>
+set_engine("xgboost")
+```
+
+
+## Workflow LightGBM
+```{r}
+lgbm_wf <- workflow() |>
+  add_recipe(recipe_prelim) |>
+  add_model(lgbm_model)
+```
+
+## Workflow Random Forest
+```{r}
+lgbm_wf <- workflow() |>
+  add_recipe(recipe_prelim) |>
+  add_model(lgbm_model)
+```
+
+## Workflow xGBoost
+```{r}
+lgbm_wf <- workflow() |>
+  add_recipe(recipe_prelim) |>
+  add_model(lgbm_model)
+```
+
+
+## Fit LightGBM
+```{r}
+lgbm_wf_fit <- lgbm_wf %>% 
+  fit(data = boosting_train)
+```
+
+## Fit Random Forest
+```{r}
+rf_wf_fit <- rf_wf %>% 
+  fit(data = boosting_train)
+```
+
+## Fit XGBoost
+```{r}
+xgb_wf_fit <- xgb_wf %>% 
+  fit(data = boosting_train)
+```
+
+
+## Define Evaluation Metrics
+```{r}
+eval_metrics <- metric_set(accuracy, sensitivity, precision, f_meas, roc_auc)
+```
+
+
+## LightGBM: Predict on the Test Set
+```{r}
+lgbm_results <- bookings_test_solutions %>% select(is_cancelled) %>% 
+  bind_cols(lgbm_wf_fit %>% 
+              predict(new_data = bookings_test_solutions)) %>% 
+  bind_cols(lgbm_wf_fit %>% 
+              predict(new_data = bookings_test_solutions, type = "prob"))
+
+```
+
+## Random Forest: Predict on the Test Set
+```{r}
+rf_results <- bookings_test_solutions %>% select(is_cancelled) %>% 
+  bind_cols(rf_wf_fit %>% 
+              predict(new_data = bookings_test_solutions)) %>% 
+  bind_cols(rf_wf_fit %>% 
+              predict(new_data = bookings_test_solutions, type = "prob"))
+
+```
+
+## XGBoost: Predict on the Test Set
+```{r}
+xgb_results <- bookings_test_solutions %>% select(is_cancelled) %>% 
+  bind_cols(xgb_wf_fit %>% 
+              predict(new_data = bookings_test_solutions)) %>% 
+  bind_cols(xgb_wf_fit %>% 
+              predict(new_data = bookings_test_solutions, type = "prob"))
+
+```
+
+# LightGBM: Evaluation Metrics
+```{r}
+eval_metrics(data = lgbm_results, truth = is_cancelled, estimate = .pred_class)
+```
+
+# Random Forest: Evaluation Metrics
+```{r}
+eval_metrics(data = rf_results, truth = is_cancelled, estimate = .pred_class)
+```
+
+# XGBoost: Evaluation Metrics
+```{r}
+eval_metrics(data = xgb_results, truth = is_cancelled, estimate = .pred_class)
+```
+
+
+
+
+
+
+
+
