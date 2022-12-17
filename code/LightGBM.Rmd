@@ -12,6 +12,87 @@ knitr::opts_chunk$set(echo = TRUE)
 ```{r}
 library(bonsai)
 library(lightgbm)
+library(tictoc)
+```
+
+```{r}
+# convert to day of week 
+tst <- c(bookings_train$arrival_date_month)
+bookings_train$arrival_date_month_numb <- match(tst,month.name)
+
+bookings_train$date_col <- as.Date(ISOdate(year = bookings_train$arrival_date_year, month = bookings_train$arrival_date_month_numb, day = bookings_train$arrival_date_day_of_month))
+
+bookings_train$arrival_date_day_of_week <- wday(bookings_train$date_col)
+
+bookings_train$arrival_date_day_of_week <- as.factor(bookings_train$arrival_date_day_of_week)
+
+
+
+# reserved roomtype being equal 
+bookings_train$got_reserved_room <- as.numeric(bookings_train$reserved_room_type == bookings_train$assigned_room_type)
+
+bookings_train$got_reserved_room <- as.factor(bookings_train$got_reserved_room)
+
+
+```
+
+# Replace Null values with NA
+```{r}
+# here we replace the null values with NA! 
+bookings_train$country <- ifelse(bookings_train$country == "NULL", NA, bookings_train$country)
+
+```
+
+# convert to factor 
+```{r}
+bookings_train$arrival_date_year <- as.factor(bookings_train$arrival_date_year)
+bookings_train$arrival_date_month <- as.factor(bookings_train$arrival_date_month)
+bookings_train$arrival_date_week_number <- as.factor(bookings_train$arrival_date_week_number)
+bookings_train$arrival_date_day_of_month <- as.factor(bookings_train$arrival_date_day_of_month)
+bookings_train$reserved_room_type <- as.factor(bookings_train$reserved_room_type)
+bookings_train$assigned_room_type <- as.factor(bookings_train$assigned_room_type)
+bookings_train$country <- as.factor(bookings_train$country)
+
+bookings_train$arrival_date_day_of_week <- as.numeric(bookings_train$arrival_date_day_of_week)
+bookings_train$arrival_date_month_numb <- as.numeric(bookings_train$arrival_date_month_numb)
+bookings_train$arrival_date_week_number <- as.numeric(bookings_train$arrival_date_week_number)
+```
+
+# Simple preprocsessing
+```{r}
+bookings_train$country <- fct_lump_min(as.factor(bookings_train$country), min=200, other_level = "Other")
+
+# remove 0 visits
+bookings_train <- bookings_train %>% 
+  filter(!(stays_in_weekend_nights == 0 & stays_in_week_nights == 0)) %>% 
+  filter(adults != 0)
+
+bookings_train <- bookings_train %>% 
+  filter(!(adr < 0))
+
+bookings_train$total_visitors <- bookings_train$children + bookings_train$adults + bookings_train$babies
+```
+
+# splitting the data
+```{r}
+# split the data
+set.seed(42)
+bookings_train_split <- initial_split(data = bookings_train, prop = 0.99, 
+                          strata = is_cancelled)
+
+# I keep the train in the name for a reason: this way we can differentiate between validation and test set later on
+bookings_train_train <- training(bookings_train_split)
+bookings_train_test <- testing(bookings_train_split)
+print(bookings_train_train |> count(is_cancelled) |> 
+  mutate(prop = n / sum(n)))
+print(bookings_train_test |> count(is_cancelled) |> 
+  mutate(prop = n / sum(n)))
+
+```
+
+```{r}
+set.seed(82001)
+cv_folds <- bookings_train_train |> vfold_cv(v = 4, strata = is_cancelled)
 ```
 
 
@@ -22,39 +103,71 @@ lgbm_model_tune <- boost_tree(
   trees = tune(), 
   min_n = tune(), 
   tree_depth = tune(),
-  learn_rate = tune(), 
+  learn_rate = tune(),
   stop_iter = 300)|>
   set_mode("classification") |>
 set_engine("lightgbm")
 ```
 
+
 # Define Recipe
 ```{r}
 recipe_prelim <- recipe(is_cancelled ~ ., data = bookings_train_train) |> 
-  # assigned_room_type might induce some information leakage; but we can discuss this
-  update_role("arrival_date_month", "arrival_date_day_of_month", "arrival_date_month_numb", "date_col", new_role = "metadata") |>
-  step_other("reserved_room_type", "meal" , "market_segment") |>
-  step_harmonic('arrival_date_day_of_week',frequency=1,cycle_size=7, role='predictor') |>
-  # step_harmonic('arrival_date_month_numb',frequency=1,cycle_size=12, role='predictor') |>          
+    step_novel('assigned_room_type') |>
+  update_role( "date_col", "arrival_date_month", "babies",  "arrival_date_day_of_month", "days_in_waiting_list", new_role = "metadata") |>
   step_harmonic('arrival_date_week_number',frequency=1,cycle_size=53, role='predictor') |>
+  step_harmonic('arrival_date_month_numb',frequency=1,cycle_size=12, role='predictor') |>   
+  step_harmonic('arrival_date_day_of_week',frequency=1,cycle_size=7, role='predictor') |>   
+  step_impute_mode("country") |>
+  step_normalize(all_numeric_predictors())|>
+  step_dummy(all_nominal_predictors())
+```
+
+
+# Try out Recipe
+```{r}
+recipe_prelim <- recipe(is_cancelled ~ ., data = bookings_train_train) |> 
+  update_role( "date_col", "arrival_date_month", new_role = "metadata") |>
+  # step_other("reserved_room_type", "meal" , "market_segment") |>
+  # step_harmonic('arrival_date_day_of_week',frequency=1,cycle_size=7, role='predictor') |>
+  # step_harmonic('arrival_date_week_number',frequency=1,cycle_size=53, role='predictor') |>
+  # step_harmonic('arrival_date_month_numb',frequency=1,cycle_size=12, role='predictor') |>   
+  step_impute_mode("country") |>
   step_normalize(all_numeric_predictors())|>
   step_dummy(all_nominal_predictors())|>
-  step_nzv(all_predictors()) %>% 
-  step_downsample('is_cancelled')
+  # step_impute_knn(all_numeric_predictors()) |>
+  step_nzv() |>
+  step_downsample("is_cancelled")
+```
+
+
+
+# RF Recipe
+```{r}
+# recipe_prelim <- recipe(is_cancelled ~ ., data = bookings_train_train) |> 
+#  update_role( "date_col", "arrival_date_month", "arrival_date_day_of_month", "children","assigned_room_type", # "reserved_room_type", "arrival_date_week_number", "total_visitors", new_role = "metadata") |>
+#  step_other("reserved_room_type", "meal" , "market_segment") |>
+#  step_harmonic('arrival_date_day_of_week',frequency=1,cycle_size=7, role='predictor') |>
+ # step_harmonic('arrival_date_week_number',frequency=1,cycle_size=53, role='predictor') |>
+  # step_harmonic('arrival_date_month_numb',frequency=1,cycle_size=12, role='predictor') |>   
+#  step_impute_mode("country") |>
+#  step_normalize(all_numeric_predictors())|>
+#  step_dummy(all_nominal_predictors())|>
+#  step_nzv() |>
+#  step_downsample("is_cancelled")
 ```
 
 
 # Combine Workflow
-```{r pressure, echo=FALSE}
+```{r}
 lgbm_tune_wf <- workflow() |>
   add_recipe(recipe_prelim) |>
   add_model(lgbm_model_tune)
 ```
 
 # Define Metrics
-```{r pressure, echo=FALSE}
-class_metrics <- metric_set(accuracy, f_meas, bal_accuracy, kap, sensitivity, 
-                            specificity, roc_auc, precision)
+```{r}
+class_metrics <- metric_set(accuracy, f_meas, roc_auc)
 ```
 
 # Parallel Computations
@@ -65,12 +178,12 @@ registerDoParallel()
 # Create RandomSearch Grid
 ```{r}
 set.seed(7)
-lgbm_grid <- grid_max_entropy(tree_depth(range = c(1, 12)), 
-                             learn_rate(range = c(-2.5, -0.7)),
-                             trees(range = c(300, 3500)),
-                             mtry(range = c(2, 10)),
-                             min_n(range = c(4, 40)),
-                             size = 30)
+lgbm_grid <- grid_max_entropy(learn_rate(range = c(-2.25, -1.85)),
+                              trees(range = c(1500, 2500)),
+                              min_n(range = c(3, 10)),
+                              tree_depth(range=c(8, 11)),
+                              mtry(range=c(6, 20)),
+                              size = 75)
 lgbm_grid
 ```
 
@@ -84,7 +197,9 @@ lgbm_tune_res <- tune_grid(
   metrics = class_metrics
 )
 toc()
+
 ```
+
 
 # Extract Best Values
 ```{r}
@@ -93,12 +208,14 @@ lgbm_tune_metrics <- lgbm_tune_res |>
 lgbm_tune_metrics
 ```
 
+
+
 # Plot Accuracy
 ```{r}
 lgbm_tune_metrics |> 
   filter(.metric == "accuracy") |> 
   ggplot(aes(x = trees, y = mean, 
-             colour = tree_depth)) +
+             colour = learn_rate)) +
   geom_point() +
   labs(y = "Accuracy") 
 ```
@@ -107,7 +224,8 @@ lgbm_tune_metrics |>
 ```{r}
 lgbm_tune_metrics |> 
   filter(.metric == "sensitivity") |> 
-  ggplot(aes(x = trees, y = mean, colour = tree_depth)) +
+  
+  ggplot(aes(x = trees, y = mean, colour = learn_rate)) +
   geom_point() +
   labs(y = "Sensitivity")
 ```
@@ -116,27 +234,26 @@ lgbm_tune_metrics |>
 # Extract Best Model
 ```{r}
 lgbm_best <- lgbm_tune_metrics |> 
-  filter(.metric == "accuracy", tree_depth == 10, trees == 2070, mtry == 6)
+  filter(.metric == "accuracy", min_n == 8, trees == 2006)
 
 second_best <- lgbm_tune_metrics %>% 
-  filter(.metric == "accuracy", tree_depth == 7, trees == 3335, mtry == 8)
-
-third_best <- lgbm_tune_metrics %>% 
-  filter(.metric == "accuracy", tree_depth == 9, trees == 1364, mtry == 10)
+  filter(.metric == "accuracy", min_n == 4, trees == 2120)
 
 lgbm_final_wf <- finalize_workflow(lgbm_tune_wf, lgbm_best)
+lgbm_second_wf <- finalize_workflow(lgbm_tune_wf, second_best)
 lgbm_final_wf
-```
 
 # Extract Best Sensitivity Model
-```{r}
-sens_best <- lgbm_tune_metrics %>% 
-  filter(.metric == "sensitivity", tree_depth == 10, trees == 1626, mtry == 9)
 
-lgbm_final_wf <- finalize_workflow(lgbm_tune_wf, sens_best)
-lgbm_final_wf
+sens_best <- lgbm_tune_metrics %>% 
+  filter(.metric == "sensitivity", min_n == 9, trees == 1754)
+
+lgbm_sens_wf <- finalize_workflow(lgbm_tune_wf, sens_best)
+lgbm_sens_wf
 
 ```
+
+
 
 
 # Last Fit on All Training Data
@@ -163,3 +280,56 @@ lgbm_final_fit |> collect_predictions() |>
   conf_mat(truth = is_cancelled, estimate = .pred_class) 
 ```
 
+
+# Check results for second best model
+```{r}
+lgbm_second_fit <- lgbm_second_wf |>
+  last_fit(bookings_train_split, metrics = class_metrics)
+
+lgbm_test_second_res <- lgbm_second_fit |>
+  collect_metrics()
+
+lgbm_test_second_res
+```
+
+```{r}
+lgbm_sens_fit <- lgbm_sens_wf |>
+  last_fit(bookings_train_split, metrics = class_metrics)
+
+lgbm_test_sens_res <- lgbm_sens_fit |>
+  collect_metrics()
+
+lgbm_test_sens_res
+```
+
+
+
+###### Re-define Best Model  ####### 
+```{r}
+lgbm_model <- 
+  boost_tree(trees = 2021, tree_depth = 10, learn_rate = 0.00471536,
+             mtry = 9, min_n = 7, stop_iter = 400) |>
+  set_mode("classification") |>
+set_engine("lightgbm")
+```
+
+# Creating workflow
+```{r}
+lgbm_wf <- workflow() |>
+  add_recipe(recipe_prelim) |>
+  add_model(lgbm_model)
+```
+
+# Fitting workflow
+```{r}
+lgbm_fit <- lgbm_wf |>
+  last_fit(bookings_train_split, metrics = class_metrics)
+```
+
+```{r}
+lgbm_test_results <- lgbm_fit |>
+  collect_metrics()
+save(lgbm_test_results, file = "lgbm_test_results.RData")
+
+lgbm_test_results
+```
