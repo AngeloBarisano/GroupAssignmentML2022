@@ -92,7 +92,7 @@ print(bookings_train_test |> count(is_cancelled) |>
 
 ```{r}
 set.seed(82001)
-cv_folds <- bookings_train_train |> vfold_cv(v = 4, strata = is_cancelled)
+cv_folds <- bookings_train_train |> vfold_cv(v = 5, strata = is_cancelled)
 ```
 
 
@@ -124,40 +124,6 @@ recipe_prelim <- recipe(is_cancelled ~ ., data = bookings_train_train) |>
 ```
 
 
-# Try out Recipe
-```{r}
-recipe_prelim <- recipe(is_cancelled ~ ., data = bookings_train_train) |> 
-  update_role( "date_col", "arrival_date_month", new_role = "metadata") |>
-  # step_other("reserved_room_type", "meal" , "market_segment") |>
-  # step_harmonic('arrival_date_day_of_week',frequency=1,cycle_size=7, role='predictor') |>
-  # step_harmonic('arrival_date_week_number',frequency=1,cycle_size=53, role='predictor') |>
-  # step_harmonic('arrival_date_month_numb',frequency=1,cycle_size=12, role='predictor') |>   
-  step_impute_mode("country") |>
-  step_normalize(all_numeric_predictors())|>
-  step_dummy(all_nominal_predictors())|>
-  # step_impute_knn(all_numeric_predictors()) |>
-  step_nzv() |>
-  step_downsample("is_cancelled")
-```
-
-
-
-# RF Recipe
-```{r}
-# recipe_prelim <- recipe(is_cancelled ~ ., data = bookings_train_train) |> 
-#  update_role( "date_col", "arrival_date_month", "arrival_date_day_of_month", "children","assigned_room_type", # "reserved_room_type", "arrival_date_week_number", "total_visitors", new_role = "metadata") |>
-#  step_other("reserved_room_type", "meal" , "market_segment") |>
-#  step_harmonic('arrival_date_day_of_week',frequency=1,cycle_size=7, role='predictor') |>
- # step_harmonic('arrival_date_week_number',frequency=1,cycle_size=53, role='predictor') |>
-  # step_harmonic('arrival_date_month_numb',frequency=1,cycle_size=12, role='predictor') |>   
-#  step_impute_mode("country") |>
-#  step_normalize(all_numeric_predictors())|>
-#  step_dummy(all_nominal_predictors())|>
-#  step_nzv() |>
-#  step_downsample("is_cancelled")
-```
-
-
 # Combine Workflow
 ```{r}
 lgbm_tune_wf <- workflow() |>
@@ -178,11 +144,11 @@ registerDoParallel()
 # Create RandomSearch Grid
 ```{r}
 set.seed(7)
-lgbm_grid <- grid_max_entropy(learn_rate(range = c(-2.25, -1.85)),
-                              trees(range = c(1500, 2500)),
-                              min_n(range = c(3, 10)),
-                              tree_depth(range=c(8, 11)),
-                              mtry(range=c(6, 20)),
+lgbm_grid <- grid_max_entropy(learn_rate(range = c(-2.25, -1.75)),
+                              trees(range = c(1000, 2500)),
+                              min_n(range = c(2, 20)),
+                              tree_depth(range=c(7, 12)),
+                              mtry(range=c(6, 25)),
                               size = 75)
 lgbm_grid
 ```
@@ -223,11 +189,11 @@ lgbm_tune_metrics |>
 # Plot Sensitivity
 ```{r}
 lgbm_tune_metrics |> 
-  filter(.metric == "sensitivity") |> 
+  filter(.metric == "f_meas") |> 
   
   ggplot(aes(x = trees, y = mean, colour = learn_rate)) +
   geom_point() +
-  labs(y = "Sensitivity")
+  labs(y = "F1")
 ```
 
 
