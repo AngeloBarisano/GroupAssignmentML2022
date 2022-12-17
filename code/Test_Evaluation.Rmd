@@ -25,6 +25,7 @@ library("vip")
 library("bonsai")
 library("lightgbm")
 library("xgboost")
+library("ggplot2")
 
 require("lubridate")
 
@@ -326,9 +327,144 @@ eval_metrics(data = xgb_results, truth = is_cancelled, estimate = .pred_class)
 ```{r}
 eval_metrics(data = lm_results, truth = is_cancelled, estimate = .pred_class)
 ```
+## Feature Importances
+```{r}
+xgb_vi <- xgb_wf_fit %>%
+  fit(data = bookings_train) %>%
+  pull_workflow_fit() %>%
+  vi()
+
+xgb_vi %>%
+  mutate(Variable = fct_reorder(Variable, Importance)) %>%
+  slice_head(n = 12) %>% 
+  ggplot( aes(x=Variable, y=Importance*100)) +
+  geom_bar(stat="identity", fill="#f68060", alpha=.6, width=.4) +
+  coord_flip() +
+  labs(title = "XGBoost Node Purity Gain",
+       y="Percentage of Total Gain")
+theme_bw()
+```
+
+
+```{r}
+rf_vi <- rf_wf_fit %>%
+  fit(data = bookings_train) %>%
+  pull_workflow_fit() %>%
+  vi()
+
+rf_vi %>% 
+  mutate(Variable = fct_reorder(Variable, Importance)) %>%
+  slice_head(n = 12) %>% 
+  ggplot( aes(x=Variable, y=Importance*100)) +
+  geom_bar(stat="identity", fill="#f68060", alpha=.6, width=.4) +
+  coord_flip() +
+  labs(title = "Random Forest Permutation Variable Importance",
+       y="Percentage Increase in Error")
+theme_bw()
+```
+## Tidymodels cannot extract feature importances for LightGBM
+## Retrain the exact model with the LightGBM package to obtain feature importances
+```{r}
+set.seed(42)
+
+bookings_train_prepped <- recipe_prelim %>% prep(bookings_train) %>% bake(bookings_train)
+
+bookings_train_pred <- bookings_train_prepped %>%
+  select(-is_cancelled)
+
+bookings_train_outcome <- bookings_train_prepped %>% 
+  select(is_cancelled) %>% 
+  mutate(is_cancelled = ifelse(is_cancelled == 'yes', 1, 0))
+
+train_x <- as.matrix(bookings_train_pred)
+train_y <- as.matrix(bookings_train_outcome)
+
+dtrain <- lgb.Dataset(train_x, label = train_y)
+
+
+lgbm_model <- boost_tree(
+  mtry = 9, 
+  trees = 2124, 
+  min_n = 4, 
+  tree_depth = 10,
+  learn_rate = 0.009549070,
+  stop_iter = 300)|>
+  set_mode("classification") |>
+set_engine("lightgbm")
 
 
 
+params <- list(
+  objective = "binary"
+  , learning_rate = 0.009549070
+  , max_depth = 10L
+  , min_data_in_leaf = 4L
+  , min_sum_hessian_in_leaf = 1.0
+  , feature_fraction = 9/ncol(bookings_train_pred)
+)
+
+model <- lgb.train(
+    params = params
+    , data = dtrain
+    , num_iterations = 2124L
+)
+
+tree_imp <- lgb.importance(model, percentage = TRUE)
+tree_imp
+```
+
+## Visualize Feature Importance for LGBM
+```{r}
+# Reorder following the value of another column:
+tree_imp %>%
+  mutate(Feature = fct_reorder(Feature, Gain)) %>%
+  slice_head(n = 12) %>% 
+  ggplot( aes(x=Feature, y=Gain*100)) +
+  geom_bar(stat="identity", fill="#f68060", alpha=.6, width=.4) +
+  geom_point(aes(x=Feature, y=Frequency*100), alpha=.6, size=3) +
+  coord_flip() +
+  labs(title = "LightGBM Node Purity Gain (bar) and Split Frequency (point)",
+       y="Percentage of Total")
+theme_bw()
+```
+
+## Plot ROC-curves for all models
+```{r}
+lgbm_roc <- roc_curve(lgbm_results, .pred_yes, truth = is_cancelled)
+xgb_roc <- roc_curve(xgb_results, .pred_yes, truth = is_cancelled)
+rf_roc <- roc_curve(rf_results, .pred_yes, truth = is_cancelled)
+lr_roc <- roc_curve(lm_results, .pred_yes, truth = is_cancelled)
+
+colors <- c("LightGBM"="blue", "XGBoost"="darkred", "Random Forest"="darkgreen",
+            "Log. Reg."="darkorange")
+
+ggplot(lgbm_roc, aes(x = 1 - specificity, y = sensitivity, color='LightGBM')) +
+  geom_path(alpha=.5, size=1) +
+  geom_path(data = xgb_roc, aes(x = 1 - specificity, y = sensitivity, color='XGBoost'), alpha=.5, size=1) +
+  geom_path(data = rf_roc, aes(x = 1 - specificity, y = sensitivity, color='Random Forest'), alpha=.5, size=1) +
+  geom_path(data = lr_roc, aes(x = 1 - specificity, y = sensitivity, color='Log. Reg.'), alpha=.5, size=1) +
+  geom_abline(lty = 3) +
+  labs(title="ROC curve", color="Legend") +
+  coord_equal() +
+  scale_color_manual(values = colors)
+```
+
+## Plot PR-curves for all models
+```{r}
+lgbm_pr <- pr_curve(lgbm_results, .pred_yes, truth = is_cancelled)
+xgb_pr <- pr_curve(xgb_results, .pred_yes, truth = is_cancelled)
+rf_pr <- pr_curve(rf_results, .pred_yes, truth = is_cancelled)
+lr_pr <- pr_curve(lm_results, .pred_yes, truth = is_cancelled)
+
+ggplot(lgbm_pr, aes(x = recall, y = precision, color='LightGBM')) +
+  geom_path(alpha=.5, size=1) +
+  geom_path(data = xgb_pr, aes(x = recall, y = precision, color='XGBoost'), alpha=.5, size=1) +
+  geom_path(data = rf_pr, aes(x = recall, y = precision, color='Random Forest'), alpha=.5, size=1) +
+  geom_path(data = lr_pr, aes(x = recall, y = precision, color='Log. Reg.'), alpha=.5, size=1) +
+  labs(title="Precision-Recall Curve", color="Legend") +
+  coord_equal() +
+  scale_color_manual(values = colors)
+```
 
 
 
