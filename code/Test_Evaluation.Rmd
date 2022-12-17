@@ -149,19 +149,18 @@ recipe_prelim <- recipe(is_cancelled ~ ., data = bookings_train) |>
   step_harmonic('arrival_date_day_of_week',frequency=1,cycle_size=7, role='predictor') |>   
   step_impute_mode("country") |>
   step_normalize(all_numeric_predictors())|>
-  step_dummy(all_nominal_predictors())|>
-  step_downsample("is_cancelled")
+  step_dummy(all_nominal_predictors())
 ```
 
 
 ## Define LightGBM
 ```{r}
 lgbm_model <- boost_tree(
-  mtry = 9, 
-  trees = 2124, 
-  min_n = 4, 
-  tree_depth = 10,
-  learn_rate = 0.009549070,
+  mtry = 22, 
+  trees = 3600, 
+  min_n = 15, 
+  tree_depth = 11,
+  learn_rate = 0.019,
   stop_iter = 300)|>
   set_mode("classification") |>
 set_engine("lightgbm")
@@ -170,7 +169,7 @@ set_engine("lightgbm")
 
 ## Define Random Forest
 ```{r}
-rf_model <- rand_forest(mtry = 9, 
+rf_model <- rand_forest(mtry = 11, 
                         trees = 500) |>
   set_mode("classification") |>
   set_engine("ranger", importance = "permutation")
@@ -180,11 +179,11 @@ rf_model <- rand_forest(mtry = 9,
 ## Define XGBoost
 ```{r}
 xgb_model <- 
-  boost_tree(trees = 1626, 
-             tree_depth = 10, 
-             learn_rate = 0.0055,
-             mtry = 9, 
-             min_n = 7, 
+  boost_tree(trees = 2703, 
+             tree_depth = 11, 
+             learn_rate = 0.021,
+             mtry = 20, 
+             min_n = 12, 
              stop_iter = 400) |>
   set_mode("classification") |>
 set_engine("xgboost")
@@ -192,7 +191,7 @@ set_engine("xgboost")
 
 ## Define Linear Model
 ```{r}
-lm_model <- logistic_reg(mode = "classification", 
+lr_model <- logistic_reg(mode = "classification", 
                        engine = "glm", 
                        penalty = NULL, 
                        mixture = NULL)
@@ -220,11 +219,11 @@ xgb_wf <- workflow() |>
   add_model(xgb_model)
 ```
 
-## Workflow Linear Model
+## Workflow Logistic Regression Model
 ```{r}
-lm_wf <- workflow() |>
+lr_wf <- workflow() |>
   add_recipe(recipe_prelim) |>
-  add_model(lm_model)
+  add_model(lr_model)
 ```
 
 ## Fit LightGBM
@@ -251,11 +250,11 @@ xgb_wf_fit <- xgb_wf %>%
   fit(data = bookings_train)
 ```
 
-## Fit Linear Model
+## Fit Logisitc Regression Model
 ```{r}
 set.seed(42)
 
-lm_wf_fit <- lm_wf %>% 
+lr_wf_fit <- lr_wf %>% 
   fit(data = bookings_train)
 ```
 
@@ -297,12 +296,12 @@ xgb_results <- bookings_test_solutions %>% select(is_cancelled) %>%
 ```
 
 
-## Linear Model: Predict on the Test Set
+## Logistic Regression Model: Predict on the Test Set
 ```{r}
-lm_results <- bookings_test_solutions %>% select(is_cancelled) %>% 
-  bind_cols(lm_wf_fit %>% 
+lr_results <- bookings_test_solutions %>% select(is_cancelled) %>% 
+  bind_cols(lr_wf_fit %>% 
               predict(new_data = bookings_test_solutions)) %>% 
-  bind_cols(lm_wf_fit %>% 
+  bind_cols(lr_wf_fit %>% 
               predict(new_data = bookings_test_solutions, type = "prob"))
 
 ```
@@ -325,7 +324,7 @@ eval_metrics(data = xgb_results, truth = is_cancelled, estimate = .pred_class)
 
 # Logistic Model: Evaluation Metrics
 ```{r}
-eval_metrics(data = lm_results, truth = is_cancelled, estimate = .pred_class)
+eval_metrics(data = lr_results, truth = is_cancelled, estimate = .pred_class)
 ```
 ## Feature Importances
 ```{r}
@@ -433,7 +432,13 @@ theme_bw()
 lgbm_roc <- roc_curve(lgbm_results, .pred_yes, truth = is_cancelled)
 xgb_roc <- roc_curve(xgb_results, .pred_yes, truth = is_cancelled)
 rf_roc <- roc_curve(rf_results, .pred_yes, truth = is_cancelled)
-lr_roc <- roc_curve(lm_results, .pred_yes, truth = is_cancelled)
+lr_roc <- roc_curve(lr_results, .pred_yes, truth = is_cancelled)
+
+lgbm_auc <- roc_auc(lgbm_results, .pred_yes, truth = is_cancelled)
+xgb_auc <- roc_auc(xgb_results, .pred_yes, truth = is_cancelled)
+rf_auc <- roc_auc(rf_results, .pred_yes, truth = is_cancelled)
+lr_auc <- roc_auc(lr_results, .pred_yes, truth = is_cancelled)
+
 
 colors <- c("LightGBM"="blue", "XGBoost"="darkred", "Random Forest"="darkgreen",
             "Log. Reg."="darkorange")
@@ -454,7 +459,7 @@ ggplot(lgbm_roc, aes(x = 1 - specificity, y = sensitivity, color='LightGBM')) +
 lgbm_pr <- pr_curve(lgbm_results, .pred_yes, truth = is_cancelled)
 xgb_pr <- pr_curve(xgb_results, .pred_yes, truth = is_cancelled)
 rf_pr <- pr_curve(rf_results, .pred_yes, truth = is_cancelled)
-lr_pr <- pr_curve(lm_results, .pred_yes, truth = is_cancelled)
+lr_pr <- pr_curve(lr_results, .pred_yes, truth = is_cancelled)
 
 ggplot(lgbm_pr, aes(x = recall, y = precision, color='LightGBM')) +
   geom_path(alpha=.5, size=1) +
@@ -465,6 +470,12 @@ ggplot(lgbm_pr, aes(x = recall, y = precision, color='LightGBM')) +
   coord_equal() +
   scale_color_manual(values = colors)
 ```
-
+## Print AUC scores
+```{r}
+print(lgbm_auc)
+print(rf_auc)
+print(xgb_auc)
+print(lr_auc)
+```
 
 
