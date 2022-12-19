@@ -142,14 +142,14 @@ bookings_train <- bookings_train %>%
 ## Define Recipe
 ```{r}
 recipe_prelim <- recipe(is_cancelled ~ ., data = bookings_train) |> 
-    step_novel('assigned_room_type') |>
+    step_novel('assigned_room_type') |>          # Account for new factor levels
   update_role( "date_col", "arrival_date_month", "babies",  "arrival_date_day_of_month", "days_in_waiting_list", new_role = "metadata") |>
-  step_harmonic('arrival_date_week_number',frequency=1,cycle_size=53, role='predictor') |>
+  step_harmonic('arrival_date_week_number',frequency=1,cycle_size=53, role='predictor') |>     # More realistic representation of time
   step_harmonic('arrival_date_month_numb',frequency=1,cycle_size=12, role='predictor') |>   
   step_harmonic('arrival_date_day_of_week',frequency=1,cycle_size=7, role='predictor') |>   
-  step_impute_mode("country") |>
-  step_normalize(all_numeric_predictors())|>
-  step_dummy(all_nominal_predictors())
+  step_impute_mode("country") |>                 # Fill NA values
+  step_normalize(all_numeric_predictors())|>     # Normalization for faster convergence
+  step_dummy(all_nominal_predictors())           # Dummy encode all remaining categorical variables  
 ```
 
 
@@ -326,6 +326,24 @@ eval_metrics(data = xgb_results, truth = is_cancelled, estimate = .pred_class)
 ```{r}
 eval_metrics(data = lr_results, truth = is_cancelled, estimate = .pred_class)
 ```
+
+## Confusion Matrices
+```{r}
+lgbm_confmat <- conf_mat(data = lgbm_results, truth = is_cancelled, estimate = .pred_class) 
+rf_confmat <- conf_mat(data = rf_results, truth = is_cancelled, estimate = .pred_class) 
+xgb_confmat <- conf_mat(data = xgb_results, truth = is_cancelled, estimate = .pred_class) 
+lr_confmat <- conf_mat(data = lr_results, truth = is_cancelled, estimate = .pred_class) 
+```
+
+
+```{r}
+print(lgbm_confmat)
+print(rf_confmat)
+print(xgb_confmat)
+print(lr_confmat)
+```
+
+
 ## Feature Importances
 ```{r}
 xgb_vi <- xgb_wf_fit %>%
