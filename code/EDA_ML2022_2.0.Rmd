@@ -1,0 +1,811 @@
+---
+title: "EDA"
+author: "Jaimy Lai"
+output: html_document
+date: "2022-12-14"
+---
+
+```{r}
+library("tidymodels")
+
+library("themis")
+library("knitr")
+library("ranger")
+library("doParallel")
+library("vip")
+
+library("skimr")
+library("corrplot")
+library("ggridges")
+
+library("forcats")
+```
+
+# SKIM
+Important notes:
+- 26 variables
+- 24035 datapoints
+- type
+    - char 4
+    - factor 5
+    - numeric 17
+- no missing values
+
+```{r}
+bookings_train |> skim()
+```
+
+```{r}
+# Summary stats
+
+stargazer(as.data.frame(bookings_train), type='text')
+```
+
+```{r}
+# Pairplots
+
+# Subset (only looked good with these vars)
+bookings_train_pairplot1 = subset(bookings_train, select = c(is_cancelled, adr, lead_time) )
+
+# pairplot'
+options(repr.plot.width = 12, repr.plot.height =16)
+ggpairs(bookings_train_pairplot1, binwidth=50)
+```
+
+## is_cancelled
+We have 6673 cancellations within the whole dataset and 17362 non-cancellations. 
+```{r}
+ggplot(data = bookings_train) +
+  geom_bar(mapping = aes(x = is_cancelled))
+
+# Unique vals + count
+table(bookings_train$is_cancelled)
+```
+
+## arrival_date_year
+Most data is from 2016, then 2017, and then 2015. The order of most to least cancellations is the same. Proportionally, 2017 has the most cancellations, then 2016 and then 2015.
+```{r}
+# bookings_train["arrival_date_year"]
+
+ggplot(data = bookings_train) +
+  geom_bar(mapping = aes(x = arrival_date_year))
+
+# Visualisation of cancelled per year
+ggplot(bookings_train, 
+       aes(x = arrival_date_year, 
+           fill = is_cancelled)) + 
+  geom_bar(position = "dodge")
+
+# Visualisation of cancelled per year (conditional probability)
+df_arrival_date_year_prob <- bookings_train %>% 
+  group_by(is_cancelled, arrival_date_year) %>% 
+  summarize(n = n()) %>% 
+  group_by(arrival_date_year) %>% 
+  mutate(prob = n / sum(n))
+ggplot(df_arrival_date_year_prob, aes(x = arrival_date_year, y = prob, fill = is_cancelled)) + 
+  geom_col() 
+
+# Check missing vlaues
+sum(is.na(bookings_train$arrival_date_year))
+
+# Bizarre values
+unique(bookings_train$arrival_date_year)
+
+# Unique vals + count
+table(bookings_train$arrival_date_year)
+```
+
+## arrival_date_month
+We can observe that around the summer months, there are more bookings, and also the most cancellations. Winter months are more quiet and thus less cancellations due to less bookings. Relatively, proportionally, the summer months july august and september have the most cancellations.
+```{r}
+#bookings_train["arrival_date_month"]
+
+ggplot(data = bookings_train) +
+  geom_bar(mapping = aes(x = arrival_date_month))
+
+# Visualisation of cancelled per month
+ggplot(bookings_train, 
+       aes(x = arrival_date_month, 
+           fill = is_cancelled)) + 
+  geom_bar(position = "dodge")
+
+# Visualisation of cancelled per month (conditional probability)
+df_arrival_date_month_prob <- bookings_train %>% 
+  group_by(is_cancelled, arrival_date_month) %>% 
+  summarize(n = n()) %>% 
+  group_by(arrival_date_month) %>% 
+  mutate(prob = n / sum(n))
+ggplot(df_arrival_date_month_prob, aes(x = arrival_date_month, y = prob, fill = is_cancelled)) + 
+  geom_col() +
+  scale_x_discrete(limits = c("January","February","March","April","May","June","July","August","September","October","November","December"))
+
+# Check missing vlaues
+sum(is.na(bookings_train$arrival_date_month))
+
+# Bizarre values
+sort(unique(bookings_train$arrival_date_month))
+
+# Unique vals + count
+table(bookings_train$arrival_date_month)
+```
+
+## arrival_date_day_of_month
+There seems to be no pattern what concerns the dat of cancellation. Logically, day 31 has the least bookings as many months don't have a 31st day. Day 30 has the most, which is something that cannot be explained by the information given from the assignment. 
+```{r}
+# bookings_train["arrival_date_day_of_month"]
+
+ggplot(data = bookings_train) +
+  geom_bar(mapping = aes(x = arrival_date_day_of_month))
+
+# Visualisation of cancelled per day of month
+ggplot(bookings_train, 
+       aes(x = arrival_date_day_of_month, 
+           fill = is_cancelled)) + 
+  geom_bar(position = "dodge")
+
+# Visualisation of cancelled per day of month (conditional probability)
+df_arrival_date_day_of_month <- bookings_train %>% 
+  group_by(is_cancelled, arrival_date_day_of_month) %>% 
+  summarize(n = n()) %>% 
+  group_by(arrival_date_day_of_month) %>% 
+  mutate(prob = n / sum(n))
+ggplot(df_arrival_date_day_of_month, aes(x = arrival_date_day_of_month, y = prob, fill = is_cancelled)) + 
+  geom_col() 
+
+# Check missing vlaues
+sum(is.na(bookings_train$arrival_date_day_of_month))
+
+# Bizarre values
+sort(unique(bookings_train$arrival_date_day_of_month))
+
+# Unique vals + count
+table(bookings_train$arrival_date_day_of_month)
+
+```
+
+## arrival_date_week_number
+We observe a big spike around the weeks where summer is. Around the beginning and end of the graph you observe the winter months which have less bookings, likely due to many people not being interested in a seaside hotel during the cold winter.
+```{r}
+# bookings_train["arrival_date_week_number"]
+
+ggplot(data = bookings_train) +
+  geom_bar(mapping = aes(x = arrival_date_week_number))
+
+# Visualisation of cancelled per arrival_date_week_number
+ggplot(bookings_train, 
+       aes(x = arrival_date_week_number, 
+           fill = is_cancelled)) + 
+  geom_bar(position = "dodge")
+
+# Visualisation of cancelled per arrival_date_week_number (conditional probability)
+df_arrival_date_week_number <- bookings_train %>% 
+  group_by(is_cancelled, arrival_date_week_number) %>% 
+  summarize(n = n()) %>% 
+  group_by(arrival_date_week_number) %>% 
+  mutate(prob = n / sum(n))
+ggplot(df_arrival_date_week_number, aes(x = arrival_date_week_number, y = prob, fill = is_cancelled)) + 
+  geom_col() 
+
+# Check missing values
+sum(is.na(bookings_train$arrival_date_week_number))
+
+# Bizarre values
+sort(unique(bookings_train$arrival_date_week_number))
+
+# Unique vals + count
+table(bookings_train$arrival_date_week_number)
+```
+
+##meal
+Meal seems to show some interesting thinbgs. For instance, we have Undefined and None's, which along with FB don't make up a big portion of the data. However, there are more cancellations than not for FB. And for None's most of the bookings have not cancelled. It could be due to people cancelling FB due to the more premium price it may have, or people are interested in going to other restaurants etc.
+```{r}
+# Visualisation of cancelled per meal
+ggplot(bookings_train, 
+       aes(x = meal, 
+           fill = is_cancelled)) + 
+  geom_bar(position = "dodge")
+
+# Visualisation of cancelled per meal (conditional probability)
+df_meal <- bookings_train %>% 
+  group_by(is_cancelled, meal) %>% 
+  summarize(n = n()) %>% 
+  group_by(meal) %>% 
+  mutate(prob = n / sum(n))
+ggplot(df_meal, aes(x = meal, y = prob, fill = is_cancelled)) + 
+  geom_col() 
+
+# Check missing values
+sum(is.na(bookings_train$meal))
+
+# Bizarre values
+sort(unique(bookings_train$meal))
+
+# Unique vals + count
+table(bookings_train$meal)
+```
+
+## lead_time
+Interestingly, we can observe that cancellations have a higher lead time than the bookings that were not cancelled. Although the non-cancellations have quite a few outliers. This could be due to there simply being more non-cancelled bookings. Anyhow, the graph seems to indicate that a longer lead time means higher chance of cancellations.
+```{r}
+boxplot(bookings_train$lead_time~bookings_train$is_cancelled, 
+        xlab="is_cancelled", ylab="Lead Time", 
+        col=topo.colors(3))
+   
+legend("bottomleft", inset=.02, title="Cancelled",
+   c("Yes","No"), fill=topo.colors(3), horiz=TRUE, cex=0.8)
+
+# Minmax
+summary(bookings_train$lead_time)
+```
+
+## stays_in_weekend_nights
+There is not a clear pattern when it comes to the amount of stays in the weekend nights. 
+```{r}
+ggplot(data = bookings_train) +
+  geom_bar(mapping = aes(x = stays_in_weekend_nights))
+
+# Visualisation of cancelled per stays_in_weekend_nights
+ggplot(bookings_train, 
+       aes(x = stays_in_weekend_nights, 
+           fill = is_cancelled)) + 
+  geom_bar(position = "dodge")
+
+# Visualisation of cancelled per stays_in_weekend_nights (conditional probability)
+df_stays_in_weekend_nights <- bookings_train %>% 
+  group_by(is_cancelled, stays_in_weekend_nights) %>% 
+  summarize(n = n()) %>% 
+  group_by(stays_in_weekend_nights) %>% 
+  mutate(prob = n / sum(n))
+ggplot(df_stays_in_weekend_nights, aes(x = stays_in_weekend_nights, y = prob, fill = is_cancelled)) + 
+  geom_col() 
+
+# Check missing values
+sum(is.na(bookings_train$stays_in_weekend_nights))
+
+# Check for bizarre values
+sort(unique(bookings_train$stays_in_weekend_nights))
+
+# Unique vals + count
+table(bookings_train$stays_in_weekend_nights)
+```
+
+## stays_in_week_nights
+As well as for the stays in week nights, there seems to be little pattern.
+```{r}
+ggplot(data = bookings_train) +
+  geom_bar(mapping = aes(x = stays_in_week_nights))
+
+# Visualisation of cancelled per stays_in_week_nights
+ggplot(bookings_train, 
+       aes(x = stays_in_week_nights, 
+           fill = is_cancelled)) + 
+  geom_bar(position = "dodge")
+
+# Visualisation of cancelled per stays_in_week_nights (conditional probability)
+df_stays_in_week_nights <- bookings_train %>% 
+  group_by(is_cancelled, stays_in_week_nights) %>% 
+  summarize(n = n()) %>% 
+  group_by(stays_in_week_nights) %>% 
+  mutate(prob = n / sum(n))
+ggplot(df_stays_in_week_nights, aes(x = stays_in_week_nights, y = prob, fill = is_cancelled)) + 
+  geom_col() 
+
+# Check missing values
+sum(is.na(bookings_train$stays_in_week_nights))
+
+# Check for bizarre values
+sort(unique(bookings_train$stays_in_week_nights))
+
+# Unique vals + count
+table(bookings_train$stays_in_week_nights)
+```
+
+## adults
+As for the amount of adults in a booking, it seems as though the more adults, the higher the chance of cancellation. As soon as more than 3 adults book a hotel, the ratio of cancelled and not cancelled is completely red, thus indicating lots of cancellations.
+```{r}
+ggplot(data = bookings_train) +
+  geom_bar(mapping = aes(x = adults))
+
+# Visualisation of cancelled per adults
+ggplot(bookings_train, 
+       aes(x = adults, 
+           fill = is_cancelled)) + 
+  geom_bar(position = "dodge")
+
+# Visualisation of cancelled per adults (conditional probability)
+df_adults <- bookings_train %>% 
+  group_by(is_cancelled, adults) %>% 
+  summarize(n = n()) %>% 
+  group_by(adults) %>% 
+  mutate(prob = n / sum(n))
+ggplot(df_adults, aes(x = adults, y = prob, fill = is_cancelled)) + 
+  geom_col() 
+
+# Check missing values
+sum(is.na(bookings_train$adults))
+
+# Check for bizarre values
+sort(unique(bookings_train$adults))
+
+# Unique vals + count
+table(bookings_train$adults)
+```
+
+## children
+We can observe that most bookings do not include children. If children are included, it is mostly one or two and very little include 3 children. We can observe that the more children, the more cancellations, although for 3 children the ratio is in favor completely towards no cancellation.
+```{r}
+ggplot(data = bookings_train) +
+  geom_bar(mapping = aes(x = children))
+
+# Visualisation of cancelled per children
+ggplot(bookings_train, 
+       aes(x = children, 
+           fill = is_cancelled)) + 
+  geom_bar(position = "dodge")
+
+# Visualisation of cancelled per children (conditional probability)
+df_children <- bookings_train %>% 
+  group_by(is_cancelled, children) %>% 
+  summarize(n = n()) %>% 
+  group_by(children) %>% 
+  mutate(prob = n / sum(n))
+ggplot(df_children, aes(x = children, y = prob, fill = is_cancelled)) + 
+  geom_col() 
+
+# Check missing values
+sum(is.na(bookings_train$children))
+
+# Check for bizarre values
+sort(unique(bookings_train$children))
+
+# Unique vals + count
+table(bookings_train$children)
+```
+
+## babies
+Although there is an enormous data imbalance, thus we cannot make an accurate conclusion, it seems as if the more babies, the less cancellations. However, most data has 0 babies.
+```{r}
+ggplot(data = bookings_train) +
+  geom_bar(mapping = aes(x = babies))
+
+# Visualisation of cancelled per babies
+ggplot(bookings_train, 
+       aes(x = babies, 
+           fill = is_cancelled)) + 
+  geom_bar(position = "dodge")
+
+# Visualisation of cancelled per babies (conditional probability)
+df_babies <- bookings_train %>% 
+  group_by(is_cancelled, babies) %>% 
+  summarize(n = n()) %>% 
+  group_by(babies) %>% 
+  mutate(prob = n / sum(n))
+ggplot(df_babies, aes(x = babies, y = prob, fill = is_cancelled)) + 
+  geom_col() 
+
+
+# Check missing values
+sum(is.na(bookings_train$babies))
+
+# Check for bizarre values
+sort(unique(bookings_train$babies))
+
+# Unique vals + count
+table(bookings_train$babies)
+```
+
+## country
+We can observe that most data comes from portugese and british people, after that spanish and irish. Furthermore, we also have a low of 1's from different countries. 
+```{r}
+ggplot(data = bookings_train) +
+  geom_bar(mapping = aes(x = country))
+
+# Visualisation of cancelled per weeknumber
+ggplot(bookings_train, 
+       aes(x = country, 
+           fill = is_cancelled)) + 
+  geom_bar(position = "dodge")
+
+# Check missing values
+sum(is.na(bookings_train$country))
+
+# Check for bizarre values
+sort(unique(bookings_train$country))
+
+# Unique vals + count: SORTED
+sort(table(bookings_train$country))
+```
+
+## market_segment
+We can observe that most of the data belongs in the category Online TA, then offline TA/TO, Direct and then Other. Furthermore, we can observe that Direct, Offline TA/TO and Others mostly do not have cancellations, whereas Groups and Online TA have more cancellations.
+```{r}
+ggplot(data = bookings_train) +
+  geom_bar(mapping = aes(x = market_segment))
+
+# Visualisation of cancelled per weeknumber
+ggplot(bookings_train, 
+       aes(x = market_segment, 
+           fill = is_cancelled)) + 
+  geom_bar(position = "dodge")
+
+# Visualisation of cancelled per market_segment (conditional probability)
+df_market_segment <- bookings_train %>% 
+  group_by(is_cancelled, market_segment) %>% 
+  summarize(n = n()) %>% 
+  group_by(market_segment) %>% 
+  mutate(prob = n / sum(n))
+ggplot(df_market_segment, aes(x = market_segment, y = prob, fill = is_cancelled)) + 
+  geom_col() 
+
+# Check missing values
+sum(is.na(bookings_train$market_segment))
+
+# Check for bizarre values
+sort(unique(bookings_train$market_segment))
+
+# Unique vals + count
+sort(table(bookings_train$market_segment))
+```
+
+## is_repeated_guest
+We can see that most cookings are from first-timers. Howwever, we can also see that the bookings which are a repeated stay, the amount of cancellations in proportionally smaller than for the first-timers.
+```{r}
+ggplot(data = bookings_train) +
+  geom_bar(mapping = aes(x = is_repeated_guest))
+
+# Visualisation of cancelled per weeknumber
+ggplot(bookings_train, 
+       aes(x = is_repeated_guest, 
+           fill = is_cancelled)) + 
+  geom_bar(position = "dodge")
+
+# Visualisation of cancelled per is_repeated_guest (conditional probability)
+df_is_repeated_guest <- bookings_train %>% 
+  group_by(is_cancelled, is_repeated_guest) %>% 
+  summarize(n = n()) %>% 
+  group_by(is_repeated_guest) %>% 
+  mutate(prob = n / sum(n))
+ggplot(df_is_repeated_guest, aes(x = is_repeated_guest, y = prob, fill = is_cancelled)) + 
+  geom_col() 
+
+# Check missing values
+sum(is.na(bookings_train$is_repeated_guest))
+
+# Check for bizarre values
+sort(unique(bookings_train$is_repeated_guest))
+
+# Unique vals + count
+sort(table(bookings_train$is_repeated_guest))
+```
+
+## previous_cancellations
+```{r}
+ggplot(data = bookings_train) +
+  geom_bar(mapping = aes(x = previous_cancellations))
+
+# Visualisation of cancelled per weeknumber
+ggplot(bookings_train, 
+       aes(x = previous_cancellations, 
+           fill = is_cancelled)) + 
+  geom_bar(position = "dodge")
+
+# Visualisation of cancelled per previous_cancellations (conditional probability)
+df_previous_cancellations <- bookings_train %>% 
+  group_by(is_cancelled, previous_cancellations) %>% 
+  summarize(n = n()) %>% 
+  group_by(previous_cancellations) %>% 
+  mutate(prob = n / sum(n))
+ggplot(df_previous_cancellations, aes(x = previous_cancellations, y = prob, fill = is_cancelled)) + 
+  geom_col() 
+
+# Check missing values
+sum(is.na(bookings_train$previous_cancellations))
+
+# Check for bizarre values
+sort(unique(bookings_train$previous_cancellations))
+
+# Unique vals + count
+table(bookings_train$previous_cancellations)
+```
+
+## previous_bookings_not_cancelled'
+In this graph, we can observe a clear pattern in which, the more bookings people have had in which they did not cancel, the higher the chance that they will not cancel their current booking.
+```{r}
+ggplot(data = bookings_train) +
+  geom_bar(mapping = aes(x = previous_bookings_not_cancelled))
+
+# Visualisation of cancelled per weeknumber
+ggplot(bookings_train, 
+       aes(x = previous_bookings_not_cancelled, 
+           fill = is_cancelled)) + 
+  geom_bar(position = "dodge")
+
+# Visualisation of cancelled per previous_bookings_not_cancelled (conditional probability)
+df_previous_bookings_not_cancelled <- bookings_train %>% 
+  group_by(is_cancelled, previous_bookings_not_cancelled) %>% 
+  summarize(n = n()) %>% 
+  group_by(previous_bookings_not_cancelled) %>% 
+  mutate(prob = n / sum(n))
+ggplot(df_previous_bookings_not_cancelled, aes(x = previous_bookings_not_cancelled, y = prob, fill = is_cancelled)) + 
+  geom_col() 
+
+# Check missing values
+sum(is.na(bookings_train$previous_bookings_not_cancelled))
+
+# Check for bizarre values
+sort(unique(bookings_train$previous_bookings_not_cancelled))
+
+# Unique vals + count
+sort(table(bookings_train$previous_bookings_not_cancelled))
+```
+
+## reserved_room_type
+In this case we see some interesting patterns, most of the reserved rooms are A, then D and then E. We do not have many bookings for P and B but all P's bookings have been cancelled and none of B's. However due to the data imbalance, this is a conclusion we cannot make as we lack a proper sample. 
+```{r}
+ggplot(data = bookings_train) +
+  geom_bar(mapping = aes(x = reserved_room_type))
+
+# Visualisation of cancelled per weeknumber
+ggplot(bookings_train, 
+       aes(x = reserved_room_type, 
+           fill = is_cancelled)) + 
+  geom_bar(position = "dodge")
+
+# Visualisation of cancelled per reserved_room_type (conditional probability)
+df_reserved_room_type <- bookings_train %>% 
+  group_by(is_cancelled, reserved_room_type) %>% 
+  summarize(n = n()) %>% 
+  group_by(reserved_room_type) %>% 
+  mutate(prob = n / sum(n))
+ggplot(df_reserved_room_type, aes(x = reserved_room_type, y = prob, fill = is_cancelled)) + 
+  geom_col() 
+
+# Check missing values
+sum(is.na(bookings_train$reserved_room_type))
+
+# Check for bizarre values
+sort(unique(bookings_train$reserved_room_type))
+
+# Unique vals + count
+sort(table(bookings_train$reserved_room_type))
+```
+
+## assigned_room_type
+Once again, here we have a big data imbalance, and therefore cannot make confident conclusions about certain room types. However, interestingly we see that, here, for B we mainly have more bookings not cancelled proportionally, and P only has cancellations when assigned.
+```{r}
+ggplot(data = bookings_train) +
+  geom_bar(mapping = aes(x = assigned_room_type))
+
+# Visualisation of cancelled per weeknumber
+ggplot(bookings_train, 
+       aes(x = assigned_room_type, 
+           fill = is_cancelled)) + 
+  geom_bar(position = "dodge")
+
+# Visualisation of cancelled per assigned_room_type (conditional probability)
+df_assigned_room_type <- bookings_train %>% 
+  group_by(is_cancelled, assigned_room_type) %>% 
+  summarize(n = n()) %>% 
+  group_by(assigned_room_type) %>% 
+  mutate(prob = n / sum(n))
+ggplot(df_assigned_room_type, aes(x = assigned_room_type, y = prob, fill = is_cancelled)) + 
+  geom_col() 
+
+# Check missing values
+sum(is.na(bookings_train$assigned_room_type))
+
+# Check for bizarre values
+sort(unique(bookings_train$assigned_room_type))
+
+# Unique vals + count
+sort(table(bookings_train$assigned_room_type))
+```
+
+## booking_changes
+It seems here as though the more bookig changes, the less cancellations. However, it should be remembered that there is data imbalance and most of the data consists of 0 booking changes or perhaps 1. 
+```{r}
+ggplot(data = bookings_train) +
+  geom_bar(mapping = aes(x = booking_changes))
+
+# Visualisation of cancelled per weeknumber
+ggplot(bookings_train, 
+       aes(x = booking_changes, 
+           fill = is_cancelled)) + 
+  geom_bar(position = "dodge")
+
+# Visualisation of cancelled per booking_changes (conditional probability)
+df_booking_changes <- bookings_train %>% 
+  group_by(is_cancelled, booking_changes) %>% 
+  summarize(n = n()) %>% 
+  group_by(booking_changes) %>% 
+  mutate(prob = n / sum(n))
+ggplot(df_booking_changes, aes(x = booking_changes, y = prob, fill = is_cancelled)) + 
+  geom_col() 
+
+
+# Check missing values
+sum(is.na(bookings_train$booking_changes))
+
+# Check for bizarre values
+sort(unique(bookings_train$booking_changes))
+
+# Unique vals + count
+sort(table(bookings_train$booking_changes))
+```
+
+## deposit_type
+As for the deposit type, we mostly have data on the no deposit type. Furthermore we have non refund and refundable. The non refundable category seems to have a large amount of cancellations proportionally wise. 
+```{r}
+ggplot(data = bookings_train) +
+  geom_bar(mapping = aes(x = deposit_type))
+
+# Visualisation of cancelled per weeknumber
+ggplot(bookings_train, 
+       aes(x = deposit_type, 
+           fill = is_cancelled)) + 
+  geom_bar(position = "dodge")
+
+# Visualisation of cancelled per deposit_type (conditional probability)
+df_deposit_type <- bookings_train %>% 
+  group_by(is_cancelled, deposit_type) %>% 
+  summarize(n = n()) %>% 
+  group_by(deposit_type) %>% 
+  mutate(prob = n / sum(n))
+ggplot(df_deposit_type, aes(x = deposit_type, y = prob, fill = is_cancelled)) + 
+  geom_col() 
+
+# Check missing values
+sum(is.na(bookings_train$deposit_type))
+
+# Check for bizarre values
+sort(unique(bookings_train$deposit_type))
+
+# Unique vals + count
+sort(table(bookings_train$deposit_type))
+```
+
+## days_in_waiting_list
+There seems to be no clear pattern in this case, but it can be that the more days waitlisted, the less cancellations there are. However, the sample of the data is not reporesentative for all days. Mostly, the days are 0.
+```{r}
+ggplot(data = bookings_train) +
+  geom_bar(mapping = aes(x = days_in_waiting_list))
+
+# Visualisation of cancelled per weeknumber
+ggplot(bookings_train, 
+       aes(x = days_in_waiting_list, 
+           fill = is_cancelled)) + 
+  geom_bar(position = "dodge")
+
+
+# Visualisation of cancelled per days_in_waiting_list (conditional probability)
+df_days_in_waiting_list <- bookings_train %>% 
+  group_by(is_cancelled, days_in_waiting_list) %>% 
+  summarize(n = n()) %>% 
+  group_by(days_in_waiting_list) %>% 
+  mutate(prob = n / sum(n))
+ggplot(df_days_in_waiting_list, aes(x = days_in_waiting_list, y = prob, fill = is_cancelled)) + 
+  geom_col() 
+
+# Check missing values
+sum(is.na(bookings_train$days_in_waiting_list))
+
+# Check for bizarre values
+sort(unique(bookings_train$days_in_waiting_list))
+
+# Unique vals + count
+sort(table(bookings_train$days_in_waiting_list))
+```
+
+## customer_type
+Most customers are apaprently transient, transient-party, contract, group. Transient seems to have the most cancellations and the least cancellations fall under the category of contract.
+```{r}
+ggplot(data = bookings_train) +
+  geom_bar(mapping = aes(x = customer_type))
+
+# Visualisation of cancelled per weeknumber
+ggplot(bookings_train, 
+       aes(x = customer_type, 
+           fill = is_cancelled)) + 
+  geom_bar(position = "dodge")
+
+# Visualisation of cancelled per customer_type (conditional probability)
+df_customer_type <- bookings_train %>% 
+  group_by(is_cancelled, customer_type) %>% 
+  summarize(n = n()) %>% 
+  group_by(customer_type) %>% 
+  mutate(prob = n / sum(n))
+ggplot(df_customer_type, aes(x = customer_type, y = prob, fill = is_cancelled)) + 
+  geom_col() 
+
+
+# Check missing values
+sum(is.na(bookings_train$customer_type))
+
+# Check for bizarre values
+sort(unique(bookings_train$customer_type))
+
+# Unique vals + count
+sort(table(bookings_train$customer_type))
+```
+
+## adr
+Interestingly, we can observe that the distribution of ADR for cancelled is higher and more disperse than the one of no cancellation. It would indicate that higher values of ADR means higher chance of cancellation.
+```{r}
+boxplot(bookings_train$adr~bookings_train$is_cancelled, 
+        xlab="is_cancelled", ylab="ADR", 
+        col=topo.colors(3))
+   
+legend("bottomleft", inset=.02, title="Cancellation",
+   c("Yes","No"), fill=topo.colors(3), horiz=TRUE, cex=0.8)
+
+# Minmax
+summary(bookings_train$adr)
+
+table(bookings_train$adr)
+```
+
+## required_car_parking_spaces
+
+As for parking spaces, most of the bookings include 0 parking space, however the ones that do seem to have no cancellations proportially. Indicatint hat when people request a parking space, they no not (easily) cancel their booking.
+```{r}
+ggplot(data = bookings_train) +
+  geom_bar(mapping = aes(x = required_car_parking_spaces))
+
+# Visualisation of cancelled per weeknumber
+ggplot(bookings_train, 
+       aes(x = required_car_parking_spaces, 
+           fill = is_cancelled)) + 
+  geom_bar(position = "dodge")
+
+# Visualisation of cancelled per required_car_parking_spaces (conditional probability)
+df_required_car_parking_spaces <- bookings_train %>% 
+  group_by(is_cancelled, required_car_parking_spaces) %>% 
+  summarize(n = n()) %>% 
+  group_by(required_car_parking_spaces) %>% 
+  mutate(prob = n / sum(n))
+ggplot(df_required_car_parking_spaces, aes(x = required_car_parking_spaces, y = prob, fill = is_cancelled)) + 
+  geom_col() 
+
+# Check missing values
+sum(is.na(bookings_train$required_car_parking_spaces))
+
+# Check for bizarre values
+sort(unique(bookings_train$required_car_parking_spaces))
+
+# Unique vals + count
+sort(table(bookings_train$required_car_parking_spaces))
+```
+
+## total_of_special_requests
+It can be observed within the graphs that most people do not have any special guests, but there seems to be a pattern in which the more special guests that are included in the booking, the higher the chance of non-cancellation.
+```{r}
+ggplot(data = bookings_train) +
+  geom_bar(mapping = aes(x = total_of_special_requests))
+
+# Visualisation of cancelled per weeknumber
+ggplot(bookings_train, 
+       aes(x = total_of_special_requests, 
+           fill = is_cancelled)) + 
+  geom_bar(position = "dodge")
+
+# Visualisation of cancelled per total_of_special_requests (conditional probability)
+df_total_of_special_requests <- bookings_train %>% 
+  group_by(is_cancelled, total_of_special_requests) %>% 
+  summarize(n = n()) %>% 
+  group_by(total_of_special_requests) %>% 
+  mutate(prob = n / sum(n))
+ggplot(df_total_of_special_requests, aes(x = total_of_special_requests, y = prob, fill = is_cancelled)) + 
+  geom_col() 
+
+# Check missing values
+sum(is.na(bookings_train$total_of_special_requests))
+
+# Check for bizarre values
+sort(unique(bookings_train$total_of_special_requests))
+
+# Unique vals + count
+sort(table(bookings_train$total_of_special_requests))
+```
+
+
+
