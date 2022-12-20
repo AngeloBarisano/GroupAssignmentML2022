@@ -451,7 +451,6 @@ xgb_vi %>%
   coord_flip() +
   labs(title = "XGBoost Node Purity Gain",
        y="Percentage of Total Gain")
-theme_bw()
 ```
 
 
@@ -469,7 +468,6 @@ rf_vi %>%
   coord_flip() +
   labs(title = "Random Forest Permutation Variable Importance",
        y="Percentage Increase in Error")
-theme_bw()
 ```
 
 
@@ -536,7 +534,6 @@ tree_imp %>%
   coord_flip() +
   labs(title = "LightGBM Node Purity Gain (bar) and Split Frequency (point)",
        y="Percentage of Total")
-theme_bw()
 ```
 
 ## Plot ROC-curves for all models
