@@ -33,8 +33,8 @@ require("lubridate")
 
 ## Load Train and Test Data
 ```{r}
-load("D:/Universiteit/R/GroupAssignmentML2022/bookings_train.RData")
-load("D:/Universiteit/R/GroupAssignmentML2022/bookings_test_solutions.RData")
+load("/home/angelo/Documents/Uni/Courses/Machine Learning & Algorithms/group_assignment/data/bookings_train.RData")
+load("/home/angelo/Documents/Uni/Courses/Machine Learning & Algorithms/group_assignment/data/bookings_test_solutions.RData")
 ```
 
 
