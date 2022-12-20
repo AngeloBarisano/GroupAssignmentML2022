@@ -1,6 +1,6 @@
 ---
-title: "Testset_Evaluation"
-author: "Myself"
+title: "Test Set Evaluation"
+author: "JeanLuc"
 date: "2022-12-16"
 output: html_document
 ---
@@ -29,15 +29,12 @@ library("ggplot2")
 
 require("lubridate")
 
-
-
-
 ```
 
 ## Load Train and Test Data
 ```{r}
-load("/home/angelo/Documents/Uni/Courses/Machine Learning & Algorithms/group_assignment/data/bookings_train.RData")
-load("/home/angelo/Documents/Uni/Courses/Machine Learning & Algorithms/group_assignment/data/bookings_test_solutions.RData")
+load("D:/Universiteit/R/GroupAssignmentML2022/bookings_train.RData")
+load("D:/Universiteit/R/GroupAssignmentML2022/bookings_test_solutions.RData")
 ```
 
 
@@ -161,11 +158,11 @@ recipe_prelim <- recipe(is_cancelled ~ ., data = bookings_train) |>
 ## Define LightGBM
 ```{r}
 lgbm_model <- boost_tree(
-  mtry = 9, 
-  trees = 2124, 
-  min_n = 4, 
-  tree_depth = 10,
-  learn_rate = 0.009549070,
+  mtry = 22, 
+  trees = 3600, 
+  min_n = 15, 
+  tree_depth = 11,
+  learn_rate = 0.019,
   stop_iter = 300)|>
   set_mode("classification") |>
   set_engine("lightgbm")
@@ -174,7 +171,7 @@ lgbm_model <- boost_tree(
 
 ## Define Random Forest
 ```{r}
-rf_model <- rand_forest(mtry = 9, 
+rf_model <- rand_forest(mtry = 10, 
                         trees = 500) |>
   set_mode("classification") |>
   set_engine("ranger", importance = "permutation")
@@ -184,25 +181,25 @@ rf_model <- rand_forest(mtry = 9,
 ## Define XGBoost
 ```{r}
 xgb_model <- 
-  boost_tree(trees = 1626, 
-             tree_depth = 10, 
-             learn_rate = 0.0055,
-             mtry = 9, 
-             min_n = 7, 
+  boost_tree(trees = 1500, 
+             tree_depth = 11, 
+             learn_rate = 0.02,
+             mtry = 22, 
+             min_n = 10, 
              stop_iter = 400) |>
   set_mode("classification") |>
   set_engine("xgboost")
 ```
 
-## Define Linear Model
+## Define Logistic Regression Model
 ```{r}
-lm_model <- logistic_reg(mode = "classification", 
+lr_model <- logistic_reg(mode = "classification", 
                          engine = "glm", 
                          penalty = NULL, 
                          mixture = NULL)
 ```
 
-## Define knn Model
+## Define Knn Model
 ```{r}
 knn_model <- nearest_neighbor(mode = "classification", 
                               engine = "kknn", 
@@ -246,28 +243,28 @@ xgb_wf <- workflow() |>
   add_model(xgb_model)
 ```
 
-## Workflow Linear Model
+## Workflow Logistic Regression Model
 ```{r}
-lm_wf <- workflow() |>
+lr_wf <- workflow() |>
   add_recipe(recipe_prelim) |>
-  add_model(lm_model)
+  add_model(lr_model)
 ```
 
-## Workflow knn
+## Workflow Knn
 ```{r}
 knn_wf <- workflow() |>
   add_recipe(recipe_prelim) |>
   add_model(knn_model)
 ```
 
-## Workflow lasso
+## Workflow Lasso
 ```{r}
 lasso_wf <- workflow() |>
   add_recipe(recipe_prelim) |>
   add_model(lasso_model)
 ```
 
-## Workflow ridge
+## Workflow Ridge
 ```{r}
 ridge_wf <- workflow() |>
   add_recipe(recipe_prelim) |>
@@ -298,14 +295,14 @@ xgb_wf_fit <- xgb_wf %>%
   fit(data = bookings_train)
 ```
 
-## Fit Linear Model
+## Fit Logistic Regression Model
 ```{r}
 set.seed(42)
 
-lm_wf_fit <- lm_wf %>% 
+lr_wf_fit <- lr_wf %>% 
   fit(data = bookings_train)
 ```
-## Fit knn
+## Fit Knn
 ```{r}
 set.seed(42)
 
@@ -313,7 +310,7 @@ knn_wf_fit <- knn_wf %>%
   fit(data = bookings_train)
 ```
 
-## Fit ridge
+## Fit Ridge
 ```{r}
 set.seed(42)
 
@@ -321,7 +318,7 @@ ridge_wf_fit <- ridge_wf %>%
   fit(data = bookings_train)
 ```
 
-## Fit lasso
+## Fit Lasso
 ```{r}
 set.seed(42)
 
@@ -366,16 +363,17 @@ xgb_results <- bookings_test_solutions %>% select(is_cancelled) %>%
 ```
 
 
-## Linear Model: Predict on the Test Set
+## Logistic Regression Model: Predict on the Test Set
 ```{r}
 lr_results <- bookings_test_solutions %>% select(is_cancelled) %>% 
-  bind_cols(lm_wf_fit %>% 
+  bind_cols(lr_wf_fit %>% 
               predict(new_data = bookings_test_solutions)) %>% 
-  bind_cols(lm_wf_fit %>% 
+  bind_cols(lr_wf_fit %>% 
               predict(new_data = bookings_test_solutions, type = "prob"))
 
 ```
-## knn: Predict on the Test Set
+
+## Knn: Predict on the Test Set
 ```{r}
 knn_results <- bookings_test_solutions %>% select(is_cancelled) %>% 
   bind_cols(knn_wf_fit %>% 
@@ -384,7 +382,7 @@ knn_results <- bookings_test_solutions %>% select(is_cancelled) %>%
               predict(new_data = bookings_test_solutions, type = "prob"))
 
 ```
-## ridge: Predict on the Test Set
+## Ridge: Predict on the Test Set
 ```{r}
 ridge_results <- bookings_test_solutions %>% select(is_cancelled) %>% 
   bind_cols(ridge_wf_fit %>% 
@@ -393,7 +391,7 @@ ridge_results <- bookings_test_solutions %>% select(is_cancelled) %>%
               predict(new_data = bookings_test_solutions, type = "prob"))
 
 ```
-## lasso: Predict on the Test Set
+## Lasso: Predict on the Test Set
 ```{r}
 lasso_results <- bookings_test_solutions %>% select(is_cancelled) %>% 
   bind_cols(lasso_wf_fit %>% 
@@ -423,17 +421,17 @@ eval_metrics(data = xgb_results, truth = is_cancelled, estimate = .pred_class)
 eval_metrics(data = lr_results, truth = is_cancelled, estimate = .pred_class)
 ```
 
-# knn Model: Evaluation Metrics
+# Knn Model: Evaluation Metrics
 ```{r}
 eval_metrics(data = knn_results, truth = is_cancelled, estimate = .pred_class)
 ```
 
-# ridge Model: Evaluation Metrics
+# Ridge Model: Evaluation Metrics
 ```{r}
 eval_metrics(data = ridge_results, truth = is_cancelled, estimate = .pred_class)
 ```
 
-# lasso Model: Evaluation Metrics
+# Lasso Model: Evaluation Metrics
 ```{r}
 eval_metrics(data = lasso_results, truth = is_cancelled, estimate = .pred_class)
 ```
@@ -473,6 +471,8 @@ rf_vi %>%
        y="Percentage Increase in Error")
 theme_bw()
 ```
+
+
 ## Tidymodels cannot extract feature importances for LightGBM
 ## Retrain the exact model with the LightGBM package to obtain feature importances
 ```{r}
@@ -494,11 +494,11 @@ dtrain <- lgb.Dataset(train_x, label = train_y)
 
 
 lgbm_model <- boost_tree(
-  mtry = 9, 
-  trees = 2124, 
-  min_n = 4, 
-  tree_depth = 10,
-  learn_rate = 0.009549070,
+  mtry = 22, 
+  trees = 3600, 
+  min_n = 15, 
+  tree_depth = 11,
+  learn_rate = 0.019,
   stop_iter = 300)|>
   set_mode("classification") |>
   set_engine("lightgbm")
@@ -507,17 +507,17 @@ lgbm_model <- boost_tree(
 
 params <- list(
   objective = "binary"
-  , learning_rate = 0.009549070
-  , max_depth = 10L
-  , min_data_in_leaf = 4L
+  , learning_rate = 0.019
+  , max_depth = 11L
+  , min_data_in_leaf = 15L
   , min_sum_hessian_in_leaf = 1.0
-  , feature_fraction = 9/ncol(bookings_train_pred)
+  , feature_fraction = 22/ncol(bookings_train_pred)
 )
 
 model <- lgb.train(
   params = params
   , data = dtrain
-  , num_iterations = 2124L
+  , num_iterations = 3600L
 )
 
 tree_imp <- lgb.importance(model, percentage = TRUE)

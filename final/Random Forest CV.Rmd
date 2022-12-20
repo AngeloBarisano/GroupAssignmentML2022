@@ -1,0 +1,251 @@
+---
+title: "Random Forest"
+author: "JeanLuc"
+date: "2022-12-14"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Imports
+```{r}
+library("tidymodels")
+library("themis")
+library("knitr")
+library("ranger")
+library("doParallel")
+library("vip")
+library("skimr")
+library("corrplot")
+library("ggridges")
+library("forcats")
+library("vip")
+library("bonsai")
+library("lightgbm")
+library("xgboost")
+library("ggplot2")
+library("tictoc")
+
+require("lubridate")
+```
+
+## Load Train and Test Data
+```{r}
+load("D:/Universiteit/R/GroupAssignmentML2022/bookings_train.RData")
+load("D:/Universiteit/R/GroupAssignmentML2022/bookings_test_solutions.RData")
+```
+
+
+## Feature Engineering on Train- & Test data
+```{r}
+# Create Day of Week: Train
+tst <- c(bookings_train$arrival_date_month)
+bookings_train$arrival_date_month_numb <- match(tst,month.name)
+
+bookings_train$date_col <- as.Date(ISOdate(year = bookings_train$arrival_date_year, month = bookings_train$arrival_date_month_numb, day = bookings_train$arrival_date_day_of_month))
+
+bookings_train$arrival_date_day_of_week <- wday(bookings_train$date_col)
+
+bookings_train$arrival_date_day_of_week <- as.factor(bookings_train$arrival_date_day_of_week)
+
+# Did Customer get assigned their reserved Room?: Train
+bookings_train$got_reserved_room <- as.numeric(bookings_train$reserved_room_type == bookings_train$assigned_room_type)
+
+bookings_train$got_reserved_room <- as.factor(bookings_train$got_reserved_room)
+
+# Total Visitors: Train
+bookings_train$total_visitors <- bookings_train$children + bookings_train$adults + bookings_train$babies
+```
+
+
+## Data Cleaning
+```{r}
+# Set Country NULL values to NA: Train
+bookings_train$country <- ifelse(bookings_train$country == "NULL", NA, bookings_train$country)
+
+# convert to factor: Train 
+bookings_train$arrival_date_year <- as.factor(bookings_train$arrival_date_year)
+bookings_train$arrival_date_month <- as.factor(bookings_train$arrival_date_month)
+bookings_train$arrival_date_week_number <- as.factor(bookings_train$arrival_date_week_number)
+bookings_train$arrival_date_day_of_month <- as.factor(bookings_train$arrival_date_day_of_month)
+bookings_train$reserved_room_type <- as.factor(bookings_train$reserved_room_type)
+bookings_train$country <- as.factor(bookings_train$country)
+
+bookings_train$arrival_date_day_of_week <- as.numeric(bookings_train$arrival_date_day_of_week)
+bookings_train$arrival_date_month_numb <- as.numeric(bookings_train$arrival_date_month_numb)
+bookings_train$arrival_date_week_number <- as.numeric(bookings_train$arrival_date_week_number)
+
+bookings_train$country <- fct_lump_min(as.factor(bookings_train$country), min=200, other_level = "Other")
+```
+
+
+## Remove Seemingly wrong Observations
+```{r}
+# remove 0 visits
+bookings_train <- bookings_train %>% 
+  filter(!(stays_in_weekend_nights == 0 & stays_in_week_nights == 0)) %>% 
+  filter(adults != 0) %>% 
+  filter(!(adr < 0))
+```
+
+
+# Simple preprocsessing
+```{r}
+bookings_train$country <- fct_lump_min(as.factor(bookings_train$country), min=200, other_level = "Other")
+
+# remove 0 visits
+bookings_train <- bookings_train %>% 
+  filter(!(stays_in_weekend_nights == 0 & stays_in_week_nights == 0)) %>% 
+  filter(adults != 0)
+
+bookings_train <- bookings_train %>% 
+  filter(!(adr < 0))
+
+bookings_train$total_visitors <- bookings_train$children + bookings_train$adults + bookings_train$babies
+```
+
+# splitting the data
+```{r}
+# split the data
+set.seed(42)
+bookings_train_split <- initial_split(data = bookings_train, prop = 0.8, 
+                          strata = is_cancelled)
+
+# I keep the train in the name for a reason: this way we can differentiate between validation and test set later on
+bookings_train_train <- training(bookings_train_split)
+bookings_train_test <- testing(bookings_train_split)
+print(bookings_train_train |> count(is_cancelled) |> 
+  mutate(prop = n / sum(n)))
+print(bookings_train_test |> count(is_cancelled) |> 
+  mutate(prop = n / sum(n)))
+
+```
+
+# Create CV-folds
+```{r}
+set.seed(82001)
+cv_folds <- bookings_train_train |> vfold_cv(v = 5, strata = is_cancelled)
+```
+
+# Define Model
+```{r}
+set.seed(42)
+rf_model_tune <- rand_forest(mtry = tune(), trees = 500) |>
+  set_mode("classification") |>
+  set_engine("ranger", importance = "permutation")
+```
+
+
+# Define Recipe
+```{r}
+recipe_prelim <- recipe(is_cancelled ~ ., data = bookings_train_train) |> 
+    step_novel('assigned_room_type') |>
+  update_role( "date_col", "arrival_date_month", "babies",  "arrival_date_day_of_month", "days_in_waiting_list",  new_role = "metadata") |>
+  step_harmonic('arrival_date_week_number',frequency=1,cycle_size=53, role='predictor') |>
+  step_harmonic('arrival_date_month_numb',frequency=1,cycle_size=12, role='predictor') |>   
+  step_harmonic('arrival_date_day_of_week',frequency=1,cycle_size=7, role='predictor') |>   
+  step_impute_mode("country") |>
+  step_normalize(all_numeric_predictors())|>
+  step_dummy(all_nominal_predictors()) 
+```
+
+
+# Combine Workflow
+```{r}
+rf_tune_wf <- workflow() |>
+  add_recipe(recipe_prelim) |>
+  add_model(rf_model_tune)
+```
+
+
+# Define Metrics
+```{r}
+class_metrics <- metric_set(accuracy, f_meas, precision, recall, specificity, roc_auc)
+```
+
+
+# Parallel Computations
+```{r}
+registerDoParallel()
+```
+
+
+# Create RandomSearch Grid and Perform Tuning
+```{r}
+set.seed(42)
+
+tic()
+rf_tune_res <- tune_grid(
+  rf_tune_wf,
+  resamples = cv_folds,
+  grid = tibble(mtry = 7:11),
+  metrics = class_metrics
+)
+toc()
+
+show_notes(.Last.tune.result)
+```
+
+# Extract Best Values
+```{r}
+rf_tune_metrics <- rf_tune_res |>
+  collect_metrics()
+rf_tune_metrics
+```
+
+# Plot Sensitivity, Specificity
+```{r}
+rf_tune_res |>
+  collect_metrics() |>
+  filter(.metric %in% c("recall", "specificity")) |>
+  ggplot(aes(x = mtry, y = mean, ymin = mean - std_err, ymax = mean + std_err, 
+             colour = .metric)) +
+  geom_errorbar() + 
+  geom_line() +
+  geom_point() +
+  facet_grid(.metric ~ ., scales = "free_y") 
+```
+
+# Plot AUC, Accuracy, Kappa
+```{r}
+rf_tune_res |>
+  collect_metrics() |>
+  filter(.metric %in% c("roc_auc", "accuracy", "kap")) |>
+  ggplot(aes(x = mtry, y = mean, ymin = mean - std_err, ymax = mean + std_err, 
+             colour = .metric)) +
+  geom_errorbar() + 
+  geom_line() +
+  geom_point() +
+  facet_grid(.metric ~ ., scales = "free_y") 
+```
+
+# Extract Best Model
+```{r}
+best_acc <- select_best(rf_tune_res, "f_meas")
+rf_final_wf <- finalize_workflow(rf_tune_wf, best_acc)
+rf_final_wf
+```
+
+# Final fit to extract importances
+```{r}
+set.seed(9923)
+rf_final_fit <- rf_final_wf |>
+  last_fit(bookings_train_split, metrics = class_metrics)
+# The results on the test set for class predictions are:
+rf_final_fit |>
+  collect_metrics()
+```
+
+# VIP
+```{r}
+rf_final_fit %>% extract_fit_parsnip() %>% vi()
+rf_final_fit |> extract_fit_parsnip() |> vip(geom = "point", num_features = 40)
+```
+
+
+
+
+
+
